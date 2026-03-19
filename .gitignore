@@ -1,0 +1,20 @@
+# Build
+bin/
+obj/
+publish/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# Rider
+.idea/
+
+# Logs e cobertura
+*.log
+coverage*/
+TestResults/
+
+# Não versionar configuração local com connection strings
+.mcp.json
