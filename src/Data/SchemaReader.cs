@@ -6,8 +6,8 @@ using Microsoft.Data.SqlClient;
 namespace Elekto.Mcp.Sql.Data;
 
 /// <summary>
-/// Encapsula todas as consultas ao SQL Server 2022+.
-/// Usa sys.* em vez de INFORMATION_SCHEMA para maior riqueza e precisão.
+/// Encapsulates all SQL Server 2022+ queries.
+/// Uses sys.* views instead of INFORMATION_SCHEMA for richer and more precise metadata.
 /// </summary>
 public sealed class SchemaReader
 {
@@ -18,10 +18,6 @@ public sealed class SchemaReader
         _connectionString = connectionString;
     }
 
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
-
     private SqlConnection OpenConnection()
     {
         var conn = new SqlConnection(_connectionString);
@@ -29,7 +25,7 @@ public sealed class SchemaReader
         return conn;
     }
 
-    /// <summary>Executa uma query e serializa o resultado como JSON array de objetos.</summary>
+    /// <summary>Executes a query and serializes the result as a JSON array of objects.</summary>
     private static string QueryToJson(SqlCommand cmd)
     {
         using var reader = cmd.ExecuteReader();
@@ -44,9 +40,42 @@ public sealed class SchemaReader
         return JsonSerializer.Serialize(rows, new JsonSerializerOptions { WriteIndented = false });
     }
 
-    // -------------------------------------------------------------------------
-    // Listagens
-    // -------------------------------------------------------------------------
+    #region Listings
+
+    /// <summary>Returns a single-object overview of the current database.</summary>
+    public string GetDatabaseOverview()
+    {
+        using var conn = OpenConnection();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT
+                DB_NAME()                                                                AS database_name,
+                SUSER_SNAME()                                                            AS connected_user,
+                CAST(SERVERPROPERTY('MachineName')   AS NVARCHAR(128))                   AS machine_name,
+                ISNULL(CAST(SERVERPROPERTY('InstanceName') AS NVARCHAR(128)), 'DEFAULT') AS instance_name,
+                @@SERVERNAME                                                             AS server_name,
+                (SELECT COUNT(*) FROM sys.tables)                                        AS table_count,
+                (SELECT COUNT(*) FROM sys.views)                                         AS view_count,
+                (SELECT COUNT(*) FROM sys.procedures)                                    AS procedure_count,
+                (SELECT COUNT(*) FROM sys.objects WHERE type IN ('FN','IF','TF'))        AS function_count,
+                (SELECT COUNT(*) FROM sys.schemas
+                 WHERE name NOT IN ('sys','guest','INFORMATION_SCHEMA',
+                                    'db_owner','db_accessadmin','db_securityadmin',
+                                    'db_ddladmin','db_backupoperator','db_datareader',
+                                    'db_datawriter','db_denydatareader','db_denydatawriter')) AS schema_count,
+                (SELECT CAST(SUM(size) * 8.0 / 1024 AS DECIMAL(10,2))
+                 FROM sys.database_files)                                                AS size_mb;
+            """;
+
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read()) return "{}";
+
+        var row = new Dictionary<string, object?>();
+        for (int i = 0; i < reader.FieldCount; i++)
+            row[reader.GetName(i)] = reader.IsDBNull(i) ? null : reader.GetValue(i);
+
+        return JsonSerializer.Serialize(row);
+    }
 
     public string ListSchemas()
     {
@@ -144,9 +173,9 @@ public sealed class SchemaReader
         return QueryToJson(cmd);
     }
 
-    // -------------------------------------------------------------------------
-    // Definições de schema
-    // -------------------------------------------------------------------------
+    #endregion
+
+    #region Table Schema
 
     public string GetTableSchema(string table, string? schema)
     {
@@ -268,9 +297,9 @@ public sealed class SchemaReader
         });
     }
 
-    // -------------------------------------------------------------------------
-    // Definições de objetos (DDL via sys.sql_modules)
-    // -------------------------------------------------------------------------
+    #endregion
+
+    #region Object Definitions
 
     private string GetObjectDefinition(string objectName, string? schema, string objectTypeFilter)
     {
@@ -335,7 +364,7 @@ public sealed class SchemaReader
     {
         using var conn = OpenConnection();
         using var cmd = conn.CreateCommand();
-        // Funções podem ser FN (scalar), IF (inline table) ou TF (multi-statement table)
+        // Functions can be FN (scalar), IF (inline table) or TF (multi-statement table)
         cmd.CommandText = """
             SELECT s.name        AS schema_name,
                    o.name        AS object_name,
@@ -355,13 +384,11 @@ public sealed class SchemaReader
         return QueryToJson(cmd);
     }
 
-    // -------------------------------------------------------------------------
-    // Query de dados (somente SELECT em tabelas/views)
-    // -------------------------------------------------------------------------
+    #endregion
 
     /// <summary>
-    /// Executa um SELECT parametrizado em uma tabela ou view.
-    /// Constrói o SQL internamente para evitar injeção.
+    /// Executes a SELECT against a table or view.
+    /// Builds the SQL internally to prevent injection.
     /// </summary>
     public string QueryTable(
         string table,
@@ -375,7 +402,7 @@ public sealed class SchemaReader
     {
         top = Math.Min(top, maxRows);
 
-        // Valida que table e schema são identificadores simples (sem aspas, ponto, etc.)
+        // Validates that table and schema are simple identifiers (no quotes, dots, etc.)
         ValidateIdentifier(table, "table");
         if (schema is not null) ValidateIdentifier(schema, "schema");
 
@@ -383,7 +410,7 @@ public sealed class SchemaReader
             ? $"[{schema}].[{table}]"
             : $"[{table}]";
 
-        // Colunas: validar cada uma individualmente
+        // Columns: validate each one individually
         string colList;
         if (string.IsNullOrWhiteSpace(columns) || columns.Trim() == "*")
         {
@@ -396,21 +423,21 @@ public sealed class SchemaReader
             colList = string.Join(", ", cols.Select(c => $"[{c}]"));
         }
 
-        // ORDER BY: obrigatório quando há OFFSET
+        // ORDER BY is required when using OFFSET
         var effectiveOrderBy = orderBy;
         if (skip > 0 && string.IsNullOrWhiteSpace(effectiveOrderBy))
-            effectiveOrderBy = "(SELECT NULL)";  // ordem arbitrária mas válida
+            effectiveOrderBy = "(SELECT NULL)";  // arbitrary but valid order
 
         var sb = new StringBuilder();
 
-        // TOP e OFFSET/FETCH não podem coexistir: usa OFFSET quando há paginação
+        // TOP and OFFSET/FETCH cannot coexist: use OFFSET when paginating
         if (skip > 0)
             sb.Append($"SELECT {colList} FROM {quotedTable}");
         else
             sb.Append($"SELECT TOP ({top}) {colList} FROM {quotedTable}");
 
-        // WHERE: aceito como texto livre — risco controlado pois o servidor é local/dev
-        // e não há DML possível neste path
+        // WHERE is accepted as free text — controlled risk since the server is internal
+        // and no DML is possible on this path
         if (!string.IsNullOrWhiteSpace(where))
             sb.Append($" WHERE {where}");
 
@@ -435,7 +462,7 @@ public sealed class SchemaReader
     {
         if (!IdentifierPattern.IsMatch(value))
             throw new ArgumentException(
-                $"Valor inválido para '{paramName}': '{value}'. " +
-                "Use apenas letras, números e underscores.");
+                $"Invalid value for '{paramName}': '{value}'. " +
+                "Use only letters, digits and underscores.");
     }
 }

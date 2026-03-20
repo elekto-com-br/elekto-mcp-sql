@@ -1,4 +1,7 @@
 <Solution>
+  <Folder Name="/Solution Items/">
+    <File Path="README.md" />
+  </Folder>
   <Project Path="src\Elekto.Mcp.Sql.csproj" />
   <Project Path="tests\Elekto.Mcp.Sql.Tests.csproj" />
 </Solution>

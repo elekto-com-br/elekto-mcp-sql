@@ -3,8 +3,8 @@ using Microsoft.Data.SqlClient;
 namespace Elekto.Mcp.Sql.Tests.Infrastructure;
 
 /// <summary>
-/// Cria e destrói o banco de testes ElektoMcpTest no LocalDB.
-/// Usado como OneTimeSetUp / OneTimeTearDown via TestDatabase.
+/// Creates and destroys the ElektoMcpTest database in LocalDB.
+/// Used as OneTimeSetUp / OneTimeTearDown through the TestDatabase fixture.
 /// </summary>
 public sealed class TestDatabase : IDisposable
 {
@@ -27,7 +27,7 @@ public sealed class TestDatabase : IDisposable
     {
         using var conn = new SqlConnection(_masterConn);
         conn.Open();
-        // Recria do zero para garantir estado limpo
+        // Recreates from scratch to ensure a clean state
         Execute(conn, $"""
             IF EXISTS (SELECT 1 FROM sys.databases WHERE name = '{DatabaseName}')
             BEGIN
@@ -43,10 +43,10 @@ public sealed class TestDatabase : IDisposable
         using var conn = new SqlConnection(ConnectionString);
         conn.Open();
 
-        // Schema extra para testar filtro por schema
+        // Extra schema for schema-filter tests
         Execute(conn, "CREATE SCHEMA financeiro;");
 
-        // Tabela principal com todos os tipos de metadados relevantes
+        // Main table covering all relevant metadata types
         Execute(conn, """
             CREATE TABLE dbo.Instrumento (
                 InstrumentoId   INT           NOT NULL IDENTITY(1,1),
@@ -72,7 +72,7 @@ public sealed class TestDatabase : IDisposable
                 'SCHEMA', 'dbo', 'TABLE', 'Instrumento', 'COLUMN', 'InstrumentoId';
             """);
 
-        // Tabela no schema financeiro para testar filtro
+        // Table in the financeiro schema for schema-filter tests
         Execute(conn, """
             CREATE TABLE financeiro.Posicao (
                 PosicaoId     INT          NOT NULL IDENTITY(1,1),
@@ -89,7 +89,7 @@ public sealed class TestDatabase : IDisposable
 
         Execute(conn, "CREATE INDEX IX_Posicao_DataRef ON financeiro.Posicao (DataRef DESC);");
 
-        // View simples
+        // Simple view
         Execute(conn, """
             CREATE VIEW dbo.vw_InstrumentosAtivos AS
             SELECT InstrumentoId, Codigo, Descricao, DataVencimento
@@ -97,7 +97,7 @@ public sealed class TestDatabase : IDisposable
             WHERE  Ativo = 1;
             """);
 
-        // View no schema financeiro
+        // View in the financeiro schema
         Execute(conn, """
             CREATE VIEW financeiro.vw_PosicaoDetalhada AS
             SELECT p.PosicaoId,
@@ -122,7 +122,7 @@ public sealed class TestDatabase : IDisposable
             END;
             """);
 
-        // Função scalar
+        // Scalar function
         Execute(conn, """
             CREATE FUNCTION dbo.fn_DiasParaVencimento (@DataVencimento DATE)
             RETURNS INT
@@ -132,7 +132,7 @@ public sealed class TestDatabase : IDisposable
             END;
             """);
 
-        // Função table-valued inline
+        // Inline table-valued function
         Execute(conn, """
             CREATE FUNCTION dbo.fn_InstrumentosVencendoEm (@Dias INT)
             RETURNS TABLE
@@ -145,7 +145,7 @@ public sealed class TestDatabase : IDisposable
             );
             """);
 
-        // Dados de amostra para testar query_table
+        // Sample data for query_table tests
         Execute(conn, """
             INSERT INTO dbo.Instrumento (Codigo, Descricao, DataVencimento, PrecoCusto, Ativo)
             VALUES

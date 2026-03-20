@@ -1,32 +1,67 @@
 # Elekto.Mcp.Sql
 
-MCP Server somente leitura para introspecção e consulta de bancos SQL Server 2022+.
-Expõe schema, definições de objetos e consultas de dados via protocolo MCP (stdio),
-permitindo que o GitHub Copilot (e outros clientes MCP) entendam a estrutura do banco
-sem acesso direto a credenciais no código do repositório.
+Read-only MCP server for SQL Server 2022+ introspection and querying.
+Exposes schema metadata, object definitions, and data queries via the MCP protocol (stdio),
+allowing GitHub Copilot (and other MCP clients) to understand your database structure
+without storing credentials in the repository.
 
-## Ferramentas disponíveis
+## ⚠️ Privacy and Data Security Warning
 
-| Tool | Descrição |
-|------|-----------|
-| `list_databases` | Bancos registrados na configuração |
-| `list_schemas` | Schemas de um banco (excluindo sistema) |
-| `list_tables` | Tabelas com schema e contagem aprox. de linhas |
-| `list_views` | Views de usuário |
-| `list_procedures` | Stored procedures de usuário |
-| `list_functions` | Funções de usuário (scalar, inline table, multi-statement table) |
-| `get_table_schema` | Colunas, PKs, FKs e índices de uma tabela |
-| `get_view_definition` | DDL + colunas de uma view |
-| `get_procedure_definition` | Texto CREATE PROCEDURE |
-| `get_function_definition` | Texto CREATE FUNCTION |
-| `query_table` | SELECT em tabela/view com filtro, ordenação e paginação |
+MCP servers act as a bridge between your local data and AI language models. When you use
+this server with an AI assistant (such as GitHub Copilot, Claude, or others), the following
+happens:
 
-## Configuração
+1. The AI agent calls tools on this server to read data from your SQL Server database.
+2. The results — which may include table schemas, stored procedure definitions, or actual
+   row data — are sent back to the AI agent and transmitted to the LLM provider's
+   infrastructure for analysis.
+3. **This means your data leaves your machine and is sent to a third-party service**
+   (Microsoft, Anthropic, OpenAI, etc.), subject to their respective terms of service
+   and privacy policies.
 
-A configuração é feita via variável de ambiente `MCP_SQL_CONNECTIONS`,
-com um objeto JSON mapeando nomes para configurações de banco.
+Before connecting this server to any database, carefully consider:
 
-### Formato simples (string de conexão direta)
+- What data could be read? Does it include PII, financial records, trade secrets,
+  or other sensitive information?
+- Who is the LLM provider and what are their data retention and privacy policies?
+- Are you authorized to share this data with that third party under applicable laws
+  and regulations?
+
+**Recommendations:**
+
+- Never connect to databases containing sensitive data unless you have explicitly assessed
+  and accepted this risk.
+- Use database accounts with the minimum required privileges (read-only, restricted to
+  specific schemas where possible).
+- Use `max_query_rows` to limit how much data can be returned in a single call.
+- Prefer databases with anonymized or synthetic data for development and exploration.
+
+**Regardless of the precautions you take, the responsibility for any consequences arising
+from the use of this tool rests entirely with you.** This software is provided *as is*
+with no warranties of any kind.
+
+## Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `list_databases` | Databases registered in the configuration |
+| `list_schemas` | Schemas in a database (excluding system schemas) |
+| `list_tables` | User tables with schema and approximate row count |
+| `list_views` | User views |
+| `list_procedures` | User stored procedures |
+| `list_functions` | User-defined functions (scalar, inline table-valued, multi-statement table-valued) |
+| `get_table_schema` | Columns, PKs, FKs and indexes of a table |
+| `get_view_definition` | DDL definition + columns of a view |
+| `get_procedure_definition` | CREATE PROCEDURE text |
+| `get_function_definition` | CREATE FUNCTION text |
+| `query_table` | SELECT from a table or view with filtering, sorting and pagination |
+
+## Configuration
+
+Configuration is provided via the `MCP_SQL_CONNECTIONS` environment variable,
+as a JSON object mapping database names to their configurations.
+
+### Simple format (direct connection string)
 
 ```json
 {
@@ -34,7 +69,7 @@ com um objeto JSON mapeando nomes para configurações de banco.
 }
 ```
 
-### Formato completo (com opções)
+### Full format (with options)
 
 ```json
 {
@@ -42,26 +77,25 @@ com um objeto JSON mapeando nomes para configurações de banco.
     "connection_string": "Server=.\\DEV;Database=RiskSystem;Integrated Security=SSPI",
     "max_query_rows": 10000
   },
-  "Relatorios": {
-    "connection_string": "Server=.\\PROD;Database=Relatorios;User Id=%{DB_USER};Password=%{DB_PASS}",
+  "Reports": {
+    "connection_string": "Server=.\\PROD;Database=Reports;User Id=%{DB_USER};Password=%{DB_PASS}",
     "max_query_rows": 1000
   }
 }
 ```
 
-### Expansão de variáveis de ambiente
+### Environment variable expansion
 
-Use `%{NOME_DA_VARIAVEL}` dentro da string de conexão para evitar credenciais em texto claro
-nos arquivos de configuração. As variáveis são resolvidas no ambiente do processo no momento
-da inicialização do servidor.
+Use `%{VARIABLE_NAME}` inside connection strings to avoid storing credentials in plain text.
+Variables are resolved from the process environment at server startup.
 
-Exemplo: `%{DB_PASS}` é substituído pelo valor de `$env:DB_PASS`.
+Example: `%{DB_PASS}` is replaced by the value of `$env:DB_PASS`.
 
-Se a variável referenciada não existir, o servidor falha com mensagem de erro explícita.
+If a referenced variable does not exist, the server fails with an explicit error message.
 
-## Configuração no Visual Studio 2026 (.mcp.json)
+## Visual Studio 2026 Setup (.mcp.json)
 
-Crie ou edite `.mcp.json` na raiz da solution (ou no perfil do usuário para uso global):
+Create or edit `.mcp.json` at the solution root (or in your user profile for global use):
 
 ```json
 {
@@ -78,38 +112,42 @@ Crie ou edite `.mcp.json` na raiz da solution (ou no perfil do usuário para uso
 }
 ```
 
-Dicas:
-- Barras invertidas dentro do JSON precisam de escape duplo (`\\\\` no JSON dentro de JSON).
-- Para connection strings com credenciais, prefira variáveis de ambiente:
+Tips:
+- Backslashes inside JSON require double escaping (`\\\\` in JSON-within-JSON).
+- For connection strings with credentials, prefer environment variables:
   ```json
   "env": {
     "MCP_SQL_CONNECTIONS": "{\"DB\": {\"connection_string\": \"...User Id=%{DB_USER};Password=%{DB_PASS}\"}}",
-    "DB_USER": "usuario",
-    "DB_PASS": "%{SENHA_NO_SISTEMA}"
+    "DB_USER": "user",
+    "DB_PASS": "%{PASSWORD_IN_SYSTEM}"
   }
   ```
-  Ou deixe `DB_USER` e `DB_PASS` apenas no ambiente do sistema operacional,
-  sem declará-las no `.mcp.json`.
+  Or set `DB_USER` and `DB_PASS` directly in the OS environment, without declaring them
+  in `.mcp.json`.
 
-Após salvar o `.mcp.json`, o Copilot reinicia o servidor automaticamente.
-As ferramentas ficam desabilitadas por padrão: habilite-as no painel de ferramentas do Copilot Chat.
+After saving `.mcp.json`, Copilot automatically restarts the server.
+Tools are disabled by default: enable them in the Copilot Chat tools panel.
 
-## Build e publicação
+## Build and Publish
 
 ```powershell
-cd Elekto.Mcp.Sql
+cd Elekto.Mcp.Sql\src
 dotnet publish -c Release -o C:\Tools\Elekto.Mcp.Sql
 ```
 
-Requer .NET 10 instalado na máquina. O diretório publicado tem ~7 MB (dependências NuGet).
-Para uso interno, isso é preferível ao self-contained (~81 MB).
+Requires .NET 10 installed on the machine. The published directory is ~7 MB (NuGet dependencies).
+For internal use, this is preferred over self-contained (~81 MB).
 
-## Limites e segurança
+## Limits and Security
 
-- Apenas SELECT em tabelas e views. DML e execução de procedures/funções não são suportados.
-- `query_table` constrói o SQL internamente a partir de parâmetros validados. Identificadores
-  (tabela, schema, colunas) são validados contra uma expressão regular antes de compor o SQL.
-- A cláusula WHERE é aceita como texto livre (necessário para flexibilidade), mas sem
-  possibilidade de DML pois o comando é construído como `SELECT TOP n ... FROM [t] WHERE ...`.
-- `max_query_rows` limita o número máximo de linhas retornadas por banco (padrão 10.000).
-  O parâmetro `top` em `query_table` é sempre limitado a esse valor.
+- Read-only: only SELECT on tables and views. DML and procedure/function execution are not supported.
+- `query_table` builds SQL internally from validated parameters. Identifiers (table, schema,
+  columns) are validated against a regular expression before being composed into SQL.
+- The WHERE clause is accepted as free text (necessary for flexibility), but DML is impossible
+  since the command is always built as `SELECT TOP n ... FROM [t] WHERE ...`.
+- `max_query_rows` caps the maximum number of rows returned per database (default 10,000).
+  The `top` parameter in `query_table` is always clamped to this value.
+- **Even so**, avoid exposing this server in untrusted environments or with sensitive data.
+  Use firewalls and access policies to restrict who can execute queries via MCP. Use
+  database accounts with the minimum required privileges (read-only) for all configured
+  connections.

@@ -5,8 +5,8 @@ using Elekto.Mcp.Sql.Tests.Infrastructure;
 namespace Elekto.Mcp.Sql.Tests;
 
 /// <summary>
-/// Testes de integração do SchemaReader contra o LocalDB.
-/// O banco ElektoMcpTest é criado uma vez por fixture e destruído ao final.
+/// Integration tests for SchemaReader against LocalDB.
+/// The ElektoMcpTest database is created once per fixture and dropped on teardown.
 /// </summary>
 [TestFixture]
 public class SchemaReaderTests
@@ -30,9 +30,45 @@ public class SchemaReaderTests
     private static JsonElement ParseObject(string json) =>
         JsonSerializer.Deserialize<JsonElement>(json);
 
-    // =========================================================================
-    // ListSchemas
-    // =========================================================================
+    [Test]
+    public void GetDatabaseOverview_ReturnsDatabaseName()
+    {
+        var result = ParseObject(_reader.GetDatabaseOverview());
+
+        Assert.That(result.GetProperty("database_name").GetString(),
+            Is.EqualTo(TestDatabase.DatabaseName));
+    }
+
+    [TestCase("table_count",     2)]
+    [TestCase("view_count",      2)]
+    [TestCase("procedure_count", 1)]
+    [TestCase("function_count",  2)]
+    [TestCase("schema_count",    2)]
+    public void GetDatabaseOverview_ObjectCounts_MatchSeedSchema(string property, int expected)
+    {
+        var result = ParseObject(_reader.GetDatabaseOverview());
+
+        Assert.That(result.GetProperty(property).GetInt32(), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void GetDatabaseOverview_SizeMb_IsGreaterThanZero()
+    {
+        var result = ParseObject(_reader.GetDatabaseOverview());
+
+        Assert.That(result.GetProperty("size_mb").GetDecimal(), Is.GreaterThan(0));
+    }
+
+    [TestCase("connected_user")]
+    [TestCase("machine_name")]
+    [TestCase("instance_name")]
+    [TestCase("server_name")]
+    public void GetDatabaseOverview_ServerMetadata_IsNotEmpty(string property)
+    {
+        var result = ParseObject(_reader.GetDatabaseOverview());
+
+        Assert.That(result.GetProperty(property).GetString(), Is.Not.Null.And.Not.Empty);
+    }
 
     [Test]
     public void ListSchemas_ReturnsUserSchemas()
@@ -53,10 +89,6 @@ public class SchemaReaderTests
         Assert.That(names, Has.No.Member("sys"));
         Assert.That(names, Has.No.Member("INFORMATION_SCHEMA"));
     }
-
-    // =========================================================================
-    // ListTables
-    // =========================================================================
 
     [Test]
     public void ListTables_NoFilter_ReturnsBothSchemas()
@@ -88,10 +120,6 @@ public class SchemaReaderTests
         Assert.That(instrumento.TryGetProperty("row_count_approx", out _), Is.True);
     }
 
-    // =========================================================================
-    // ListViews
-    // =========================================================================
-
     [Test]
     public void ListViews_NoFilter_ReturnsBothViews()
     {
@@ -111,10 +139,6 @@ public class SchemaReaderTests
             Has.All.EqualTo("dbo"));
     }
 
-    // =========================================================================
-    // ListProcedures
-    // =========================================================================
-
     [Test]
     public void ListProcedures_ReturnsSp_ObterInstrumento()
     {
@@ -123,10 +147,6 @@ public class SchemaReaderTests
 
         Assert.That(names, Has.Member("sp_ObterInstrumento"));
     }
-
-    // =========================================================================
-    // ListFunctions
-    // =========================================================================
 
     [Test]
     public void ListFunctions_ReturnsBothFunctions()
@@ -150,9 +170,7 @@ public class SchemaReaderTests
         Assert.That(tvf.GetProperty("function_type").GetString(),    Is.EqualTo("inline_table"));
     }
 
-    // =========================================================================
-    // GetTableSchema
-    // =========================================================================
+    #region GetTableSchema
 
     [Test]
     public void GetTableSchema_Instrumento_ReturnsAllColumns()
@@ -224,9 +242,7 @@ public class SchemaReaderTests
             Is.EqualTo("Identificador único do instrumento"));
     }
 
-    // =========================================================================
-    // GetViewDefinition
-    // =========================================================================
+    #endregion
 
     [Test]
     public void GetViewDefinition_ReturnsDefinitionText()
@@ -250,10 +266,6 @@ public class SchemaReaderTests
         Assert.That(columns, Has.Member("Descricao"));
     }
 
-    // =========================================================================
-    // GetProcedureDefinition
-    // =========================================================================
-
     [Test]
     public void GetProcedureDefinition_ReturnsCreateText()
     {
@@ -263,10 +275,6 @@ public class SchemaReaderTests
         Assert.That(rows[0].GetProperty("definition").GetString(),
             Does.Contain("sp_ObterInstrumento"));
     }
-
-    // =========================================================================
-    // GetFunctionDefinition
-    // =========================================================================
 
     [Test]
     public void GetFunctionDefinition_Scalar_ReturnsDefinition()
@@ -288,9 +296,7 @@ public class SchemaReaderTests
             Does.Contain("fn_InstrumentosVencendoEm"));
     }
 
-    // =========================================================================
-    // QueryTable
-    // =========================================================================
+    #region QueryTable
 
     [Test]
     public void QueryTable_DefaultTop_Returns100OrLess()
@@ -300,7 +306,7 @@ public class SchemaReaderTests
             columns: null, where: null, orderBy: null,
             top: 100, skip: 0, maxRows: 10_000));
 
-        // Temos 5 linhas de seed, todas retornam
+        // All 5 seeded rows are returned
         Assert.That(rows.Length, Is.EqualTo(5));
     }
 
@@ -353,7 +359,7 @@ public class SchemaReaderTests
     [Test]
     public void QueryTable_TopExceedsMaxRows_IsClamped()
     {
-        // maxRows = 3, top = 100 => deve retornar no máximo 3
+        // maxRows = 3, top = 100 => at most 3 rows should be returned
         var rows = ParseArray(_reader.QueryTable(
             "Instrumento", schema: null,
             columns: null, where: null, orderBy: null,
@@ -366,7 +372,7 @@ public class SchemaReaderTests
     public void QueryTable_InvalidTableIdentifier_ThrowsArgumentException()
     {
         Assert.Throws<ArgumentException>(() => _reader.QueryTable(
-            "dbo.Instrumento", schema: null,  // ponto no nome = inválido
+            "dbo.Instrumento", schema: null,  // dot in name = invalid
             columns: null, where: null, orderBy: null,
             top: 10, skip: 0, maxRows: 10_000));
     }
@@ -381,4 +387,6 @@ public class SchemaReaderTests
 
         Assert.That(rows.Length, Is.EqualTo(3));
     }
+
+    #endregion
 }

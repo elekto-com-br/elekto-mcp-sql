@@ -6,8 +6,8 @@ using ModelContextProtocol.Server;
 namespace Elekto.Mcp.Sql.Tools;
 
 /// <summary>
-/// Tools MCP para introspecção e consulta de bancos SQL Server.
-/// Todas as operações são somente leitura.
+/// MCP tools for SQL Server introspection and querying.
+/// All operations are read-only.
 /// </summary>
 [McpServerToolType]
 public sealed class SqlTools
@@ -19,17 +19,13 @@ public sealed class SqlTools
         _config = config;
     }
 
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
-
     private SchemaReader GetReader(string database)
     {
         if (!_config.Databases.TryGetValue(database, out var entry))
         {
             var available = string.Join(", ", _config.Databases.Keys);
             throw new ArgumentException(
-                $"Banco '{database}' não encontrado. Disponíveis: {available}");
+                $"Database '{database}' not found. Available: {available}");
         }
         return new SchemaReader(entry.ConnectionString);
     }
@@ -37,13 +33,9 @@ public sealed class SqlTools
     private int GetMaxRows(string database) =>
         _config.Databases.TryGetValue(database, out var e) ? e.MaxQueryRows : 10_000;
 
-    // -------------------------------------------------------------------------
-    // Metadados gerais
-    // -------------------------------------------------------------------------
-
     [McpServerTool, Description(
-        "Lista os bancos de dados registrados na configuração do servidor MCP. " +
-        "Use esta ferramenta primeiro para descobrir quais bancos estão disponíveis.")]
+        "Lists the databases registered in the MCP server configuration. " +
+        "Use this tool first to discover which databases are available.")]
     public string list_databases()
     {
         var entries = _config.Databases.Select(kv => new
@@ -55,136 +47,124 @@ public sealed class SqlTools
     }
 
     [McpServerTool, Description(
-        "Lista os schemas disponíveis em um banco de dados SQL Server, " +
-        "excluindo schemas de sistema. Retorna nome do schema e proprietário.")]
-    public string list_schemas(
-        [Description("Nome do banco conforme registrado na configuração.")] string database)
-        => GetReader(database).ListSchemas();
-
-    // -------------------------------------------------------------------------
-    // Tabelas
-    // -------------------------------------------------------------------------
+        "Returns a summary overview of a database: real name, connected user, server machine, " +
+        "instance name, table/view/procedure/function/schema counts and total allocated size in MB. " +
+        "Use this after list_databases to quickly understand a database before exploring its objects.")]
+    public string get_database_overview(
+        [Description("Name of the database as registered in the configuration.")]
+        string database)
+        => GetReader(database).GetDatabaseOverview();
 
     [McpServerTool, Description(
-        "Lista todas as tabelas de usuário de um banco de dados, " +
-        "com schema e contagem aproximada de linhas.")]
+        "Lists the available schemas in a SQL Server database, " +
+        "excluding system schemas. Returns the schema name and owner.")]
+    public string list_schemas(
+        [Description("Name of the database as registered in the configuration.")] string database)
+        => GetReader(database).ListSchemas();
+
+    [McpServerTool, Description(
+        "Lists all user tables in a database, with schema and approximate row count.")]
     public string list_tables(
-        [Description("Nome do banco conforme registrado na configuração.")]
+        [Description("Name of the database as registered in the configuration.")]
         string database,
-        [Description("Filtra pelo nome do schema (opcional).")]
+        [Description("Filter by schema name (optional).")]
         string? schema = null)
         => GetReader(database).ListTables(schema);
 
     [McpServerTool, Description(
-        "Retorna o schema completo de uma tabela: colunas (tipo, nullable, identidade, " +
-        "valor default, descrição), chaves primárias, chaves estrangeiras e índices.")]
+        "Returns the full schema of a table: columns (type, nullable, identity, " +
+        "default value, description), primary keys, foreign keys and indexes.")]
     public string get_table_schema(
-        [Description("Nome do banco conforme registrado na configuração.")]
+        [Description("Name of the database as registered in the configuration.")]
         string database,
-        [Description("Nome da tabela.")]
+        [Description("Table name.")]
         string table,
-        [Description("Schema da tabela (opcional, default dbo).")]
+        [Description("Table schema (optional, defaults to dbo).")]
         string? schema = null)
         => GetReader(database).GetTableSchema(table, schema);
 
-    // -------------------------------------------------------------------------
-    // Views
-    // -------------------------------------------------------------------------
-
     [McpServerTool, Description(
-        "Lista todas as views de usuário de um banco de dados.")]
+        "Lists all user views in a database.")]
     public string list_views(
-        [Description("Nome do banco conforme registrado na configuração.")]
+        [Description("Name of the database as registered in the configuration.")]
         string database,
-        [Description("Filtra pelo nome do schema (opcional).")]
+        [Description("Filter by schema name (optional).")]
         string? schema = null)
         => GetReader(database).ListViews(schema);
 
     [McpServerTool, Description(
-        "Retorna a definição DDL (CREATE VIEW) e as colunas de uma view.")]
+        "Returns the DDL definition (CREATE VIEW) and columns of a view.")]
     public string get_view_definition(
-        [Description("Nome do banco conforme registrado na configuração.")]
+        [Description("Name of the database as registered in the configuration.")]
         string database,
-        [Description("Nome da view.")]
+        [Description("View name.")]
         string view,
-        [Description("Schema da view (opcional, default dbo).")]
+        [Description("View schema (optional, defaults to dbo).")]
         string? schema = null)
         => GetReader(database).GetViewDefinition(view, schema);
 
-    // -------------------------------------------------------------------------
-    // Stored procedures
-    // -------------------------------------------------------------------------
-
     [McpServerTool, Description(
-        "Lista todas as stored procedures de usuário de um banco de dados.")]
+        "Lists all user stored procedures in a database.")]
     public string list_procedures(
-        [Description("Nome do banco conforme registrado na configuração.")]
+        [Description("Name of the database as registered in the configuration.")]
         string database,
-        [Description("Filtra pelo nome do schema (opcional).")]
+        [Description("Filter by schema name (optional).")]
         string? schema = null)
         => GetReader(database).ListProcedures(schema);
 
     [McpServerTool, Description(
-        "Retorna o texto de definição (CREATE PROCEDURE) de uma stored procedure.")]
+        "Returns the definition text (CREATE PROCEDURE) of a stored procedure.")]
     public string get_procedure_definition(
-        [Description("Nome do banco conforme registrado na configuração.")]
+        [Description("Name of the database as registered in the configuration.")]
         string database,
-        [Description("Nome da stored procedure.")]
+        [Description("Stored procedure name.")]
         string procedure,
-        [Description("Schema da procedure (opcional, default dbo).")]
+        [Description("Procedure schema (optional, defaults to dbo).")]
         string? schema = null)
         => GetReader(database).GetProcedureDefinition(procedure, schema);
 
-    // -------------------------------------------------------------------------
-    // Funções
-    // -------------------------------------------------------------------------
-
     [McpServerTool, Description(
-        "Lista todas as funções de usuário (scalar, inline table-valued, " +
-        "multi-statement table-valued) de um banco de dados.")]
+        "Lists all user-defined functions (scalar, inline table-valued, " +
+        "multi-statement table-valued) in a database.")]
     public string list_functions(
-        [Description("Nome do banco conforme registrado na configuração.")]
+        [Description("Name of the database as registered in the configuration.")]
         string database,
-        [Description("Filtra pelo nome do schema (opcional).")]
+        [Description("Filter by schema name (optional).")]
         string? schema = null)
         => GetReader(database).ListFunctions(schema);
 
     [McpServerTool, Description(
-        "Retorna o texto de definição (CREATE FUNCTION) de uma função de usuário.")]
+        "Returns the definition text (CREATE FUNCTION) of a user-defined function.")]
     public string get_function_definition(
-        [Description("Nome do banco conforme registrado na configuração.")]
+        [Description("Name of the database as registered in the configuration.")]
         string database,
-        [Description("Nome da função.")]
+        [Description("Function name.")]
         string function,
-        [Description("Schema da função (opcional, default dbo).")]
+        [Description("Function schema (optional, defaults to dbo).")]
         string? schema = null)
         => GetReader(database).GetFunctionDefinition(function, schema);
 
-    // -------------------------------------------------------------------------
-    // Consulta de dados (somente SELECT em tabelas/views)
-    // -------------------------------------------------------------------------
-
     [McpServerTool, Description(
-        "Executa um SELECT em uma tabela ou view. Suporta filtragem, ordenação e paginação. " +
-        "Máximo de linhas configurável por banco (padrão 10.000). " +
-        "Use 'top' e 'skip' para amostrar tabelas grandes sem sobrecarregar o servidor. " +
-        "Não executa DML (INSERT/UPDATE/DELETE) nem stored procedures.")]
+        "Executes a SELECT on a table or view. Supports filtering, sorting and pagination. " +
+        "Maximum rows are configurable per database (default 10,000). " +
+        "Use 'top' and 'skip' to sample large tables without overloading the server. " +
+        "Does not execute DML (INSERT/UPDATE/DELETE) or stored procedures.")]
     public string query_table(
-        [Description("Nome do banco conforme registrado na configuração.")]
+        [Description("Name of the database as registered in the configuration.")]
         string database,
-        [Description("Nome da tabela ou view.")]
+        [Description("Table or view name.")]
         string table,
-        [Description("Schema da tabela/view (opcional, default dbo).")]
+        [Description("Table/view schema (optional, defaults to dbo).")]
         string? schema = null,
-        [Description("Lista de colunas separadas por vírgula. Use * para todas (padrão).")]
+        [Description("Comma-separated list of columns. Use * for all (default).")]
         string? columns = null,
-        [Description("Cláusula WHERE sem a palavra-chave WHERE. Ex: 'Status = 1 AND DataRef >= ''2024-01-01'''")]
+        [Description("WHERE clause without the WHERE keyword. Ex: 'Status = 1 AND DataRef >= ''2024-01-01'''")]
         string? where = null,
-        [Description("Cláusula ORDER BY sem a palavra-chave ORDER BY. Ex: 'DataRef DESC'")]
+        [Description("ORDER BY clause without the ORDER BY keyword. Ex: 'DataRef DESC'")]
         string? order_by = null,
-        [Description("Número máximo de linhas a retornar (padrão 100, máximo configurável por banco).")]
+        [Description("Maximum number of rows to return (default 100, capped by the per-database limit).")]
         int top = 100,
-        [Description("Número de linhas a pular antes de começar a retornar (para paginação, padrão 0).")]
+        [Description("Number of rows to skip before returning results (for pagination, default 0).")]
         int skip = 0)
         => GetReader(database).QueryTable(table, schema, columns, where, order_by, top, skip, GetMaxRows(database));
 }
