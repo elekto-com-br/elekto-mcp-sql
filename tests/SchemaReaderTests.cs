@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Elekto Produtos Financeiros. Licensed under the GNU General Public License v3.0 (GPL-3.0).
+// This software is provided "as is", without warranty of any kind. Use at your own risk.
+// See the LICENSE file for the full license text.
+
 using System.Text.Json;
 using Elekto.Mcp.Sql.Data;
 using Elekto.Mcp.Sql.Tests.Infrastructure;
