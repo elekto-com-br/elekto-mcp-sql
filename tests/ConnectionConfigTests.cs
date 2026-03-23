@@ -49,7 +49,8 @@ public class ConnectionConfigTests
             {
               "MyDb": {
                 "connection_string": "Server=.;Database=Test;Integrated Security=SSPI",
-                "max_query_rows": 500
+                "max_query_rows": 500,
+                "default_timeout_seconds": 45
               }
             }
             """);
@@ -59,6 +60,39 @@ public class ConnectionConfigTests
         Assert.That(config.Databases["MyDb"].ConnectionString,
             Is.EqualTo("Server=.;Database=Test;Integrated Security=SSPI"));
         Assert.That(config.Databases["MyDb"].MaxQueryRows, Is.EqualTo(500));
+        Assert.That(config.Databases["MyDb"].DefaultTimeoutSeconds, Is.EqualTo(45));
+    }
+
+    [Test]
+    public void Load_ObjectFormat_UsesDefaultTimeout_WhenMissing()
+    {
+        Environment.SetEnvironmentVariable(EnvVar, """
+            {
+              "MyDb": {
+                "connection_string": "Server=.;Database=Test;Integrated Security=SSPI",
+                "max_query_rows": 500
+              }
+            }
+            """);
+
+        var config = ConnectionConfig.Load();
+
+        Assert.That(config.Databases["MyDb"].DefaultTimeoutSeconds, Is.EqualTo(30));
+    }
+
+    [Test]
+    public void Load_InvalidDefaultTimeout_ThrowsInvalidOperationException()
+    {
+        Environment.SetEnvironmentVariable(EnvVar, """
+            {
+              "MyDb": {
+                "connection_string": "Server=.;Database=Test;Integrated Security=SSPI",
+                "default_timeout_seconds": 0
+              }
+            }
+            """);
+
+        Assert.Throws<InvalidOperationException>(() => ConnectionConfig.Load());
     }
 
     // -------------------------------------------------------------------------

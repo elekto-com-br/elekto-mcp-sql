@@ -5,6 +5,7 @@
 using System.Text.Json;
 using Elekto.Mcp.Sql.Data;
 using Elekto.Mcp.Sql.Tests.Infrastructure;
+using Microsoft.Data.SqlClient;
 
 namespace Elekto.Mcp.Sql.Tests;
 
@@ -25,9 +26,8 @@ public class SchemaReaderTests
     public static void DropDatabase() => _db.Dispose();
 
     [SetUp]
-    public void CreateReader() => _reader = new SchemaReader(_db.ConnectionString);
+    public void CreateReader() => _reader = new SchemaReader(_db.ConnectionString, defaultTimeoutSeconds: 30);
 
-    // helpers
     private static JsonElement[] ParseArray(string json) =>
         JsonSerializer.Deserialize<JsonElement[]>(json)!;
 
@@ -43,10 +43,10 @@ public class SchemaReaderTests
             Is.EqualTo(TestDatabase.DatabaseName));
     }
 
-    [TestCase("table_count",     2)]
+    [TestCase("table_count",     3)]
     [TestCase("view_count",      2)]
-    [TestCase("procedure_count", 1)]
-    [TestCase("function_count",  2)]
+    [TestCase("procedure_count", 2)]
+    [TestCase("function_count",  3)]
     [TestCase("schema_count",    2)]
     public void GetDatabaseOverview_ObjectCounts_MatchSeedSchema(string property, int expected)
     {
@@ -392,5 +392,228 @@ public class SchemaReaderTests
         Assert.That(rows.Length, Is.EqualTo(3));
     }
 
+    [Test]
+    public void QueryTable_GroupByAndAggregates_ReturnsAggregatedRows()
+    {
+        var rows = ParseArray(_reader.QueryTable(
+            table: "Posicao",
+            schema: "financeiro",
+            columns: null,
+            where: null,
+            orderBy: "[InstrumentoId]",
+            top: 100,
+            skip: 0,
+            maxRows: 10_000,
+            groupBy: "InstrumentoId",
+            aggregates: "SUM(Quantidade) AS QuantidadeTotal, MAX(ValorMercado) AS ValorMaximo",
+            samplePercent: null));
+
+        Assert.That(rows.Length, Is.EqualTo(3));
+        Assert.That(rows[0].TryGetProperty("QuantidadeTotal", out _), Is.True);
+    }
+
+    [Test]
+    public void QueryTable_WithSampling_ReturnsSubset()
+    {
+        var rows = ParseArray(_reader.QueryTable(
+            table: "Instrumento",
+            schema: "dbo",
+            columns: "InstrumentoId",
+            where: null,
+            orderBy: null,
+            top: 100,
+            skip: 0,
+            maxRows: 10_000,
+            groupBy: null,
+            aggregates: null,
+            samplePercent: 40));
+
+        Assert.That(rows.Length, Is.LessThanOrEqualTo(5));
+    }
+
+    [Test]
+    public void QueryTable_InvalidAggregate_ThrowsArgumentException()
+    {
+        Assert.Throws<ArgumentException>(() => _reader.QueryTable(
+            table: "Instrumento",
+            schema: "dbo",
+            columns: null,
+            where: null,
+            orderBy: null,
+            top: 10,
+            skip: 0,
+            maxRows: 10_000,
+            groupBy: "Codigo",
+            aggregates: "MEDIAN(PrecoCusto)",
+            samplePercent: null));
+    }
+
+    [Test]
+    public void QueryTable_SqlError_IsWrappedWithObjectName()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() => _reader.QueryTable(
+            table: "Instrumento",
+            schema: "dbo",
+            columns: "NaoExiste",
+            where: null,
+            orderBy: null,
+            top: 10,
+            skip: 0,
+            maxRows: 10_000,
+            groupBy: null,
+            aggregates: null,
+            samplePercent: null));
+
+        Assert.That(ex!.Message, Does.Contain("[dbo].[Instrumento]"));
+    }
+
     #endregion
+
+    [Test]
+    public void GetDependencyGraph_ReturnsForeignKeyAndSqlDependencies()
+    {
+        var rows = ParseArray(_reader.GetDependencyGraph("financeiro"));
+
+        Assert.That(rows.Any(r =>
+            r.GetProperty("dependency_kind").GetString() == "FOREIGN_KEY" &&
+            r.GetProperty("from_object").GetString() == "Posicao" &&
+            r.GetProperty("to_object").GetString() == "Instrumento"), Is.True);
+
+        Assert.That(rows.Any(r =>
+            r.GetProperty("dependency_kind").GetString() == "SQL_EXPRESSION" &&
+            r.GetProperty("from_object").GetString() == "sp_ResumoPosicao"), Is.True);
+    }
+
+    [Test]
+    public void GetTableUsage_ReturnsModuleAndForeignKeyReferences()
+    {
+        var usage = ParseObject(_reader.GetTableUsage("Instrumento", "dbo"));
+
+        var fkUsage = usage.GetProperty("foreign_key_usage").EnumerateArray().ToArray();
+        var moduleUsage = usage.GetProperty("sql_module_usage").EnumerateArray().ToArray();
+
+        Assert.That(fkUsage.Any(r => r.GetProperty("referencing_object").GetString() == "Posicao"), Is.True);
+        Assert.That(moduleUsage.Any(r => r.GetProperty("referencing_object").GetString() == "vw_PosicaoDetalhada"), Is.True);
+    }
+
+    [Test]
+    public void GetDataProfile_ReturnsNullRatioDistinctAndTopValues()
+    {
+        var profile = ParseObject(_reader.GetDataProfile("Instrumento", "dbo", "Codigo,DataVencimento", 3));
+        var columns = profile.GetProperty("columns").EnumerateArray().ToArray();
+
+        var codigo = columns.First(c => c.GetProperty("column_name").GetString() == "Codigo");
+        var vencimento = columns.First(c => c.GetProperty("column_name").GetString() == "DataVencimento");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(codigo.GetProperty("distinct_count").GetInt64(), Is.EqualTo(5));
+            Assert.That(codigo.GetProperty("top_values").GetArrayLength(), Is.EqualTo(3));
+            Assert.That(vencimento.GetProperty("null_count").GetInt64(), Is.EqualTo(1));
+            Assert.That(vencimento.GetProperty("null_ratio").GetDecimal(), Is.GreaterThan(0m));
+        });
+    }
+
+    [Test]
+    public void GetIndexHealth_ReturnsDuplicateIndexCandidate()
+    {
+        var health = ParseObject(_reader.GetIndexHealth("financeiro"));
+        var duplicates = health.GetProperty("duplicate_indexes").EnumerateArray().ToArray();
+
+        Assert.That(duplicates.Any(d =>
+            d.GetProperty("table_name").GetString() == "Posicao" &&
+            d.GetProperty("index_a").GetString() == "IX_Posicao_Instrumento"), Is.True);
+    }
+
+    [Test]
+    public void GenerateDependencyDot_ReturnsDotAndNodeKinds()
+    {
+        var graph = ParseObject(_reader.GenerateDependencyDot("financeiro"));
+        var dot = graph.GetProperty("dot").GetString();
+        var nodes = graph.GetProperty("nodes").EnumerateArray().ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(graph.GetProperty("format").GetString(), Is.EqualTo("dot"));
+            Assert.That(dot, Does.Contain("digraph dependencies"));
+            Assert.That(dot, Does.Contain("dependency_kind"));
+            Assert.That(nodes.Any(n =>
+                n.GetProperty("object_name").GetString() == "Posicao" &&
+                n.GetProperty("node_kind").GetString() == "TABLE"), Is.True);
+            Assert.That(nodes.Any(n =>
+                n.GetProperty("object_name").GetString() == "vw_PosicaoDetalhada" &&
+                n.GetProperty("node_kind").GetString() == "VIEW"), Is.True);
+            Assert.That(nodes.Any(n =>
+                n.GetProperty("object_name").GetString() == "sp_ResumoPosicao" &&
+                n.GetProperty("node_kind").GetString() == "PROCEDURE"), Is.True);
+            Assert.That(nodes.Any(n =>
+                n.GetProperty("object_name").GetString() == "fn_PosicoesAcimaDe" &&
+                n.GetProperty("node_kind").GetString() == "FUNCTION"), Is.True);
+        });
+    }
+
+    [Test]
+    public void CompareSchemas_ReturnsDifferences()
+    {
+        var tempDatabase = $"ElektoMcpTest_Compare_{Guid.NewGuid():N}";
+        try
+        {
+            CreateCompareDatabase(tempDatabase);
+            var targetConn = $"Server={TestDatabase.InstanceName};Database={tempDatabase};Integrated Security=SSPI;TrustServerCertificate=True";
+            var targetReader = new SchemaReader(targetConn);
+
+            var result = ParseObject(SchemaReader.CompareSchemas(_reader, targetReader, "financeiro", "financeiro"));
+            var missing = result.GetProperty("missing_tables_in_target").EnumerateArray().Select(x => x.GetString()).ToList();
+            var diffs = result.GetProperty("table_column_differences").EnumerateArray().ToArray();
+
+            Assert.That(missing, Has.Member("financeiro.MovimentoPosicao"));
+            Assert.That(diffs.Any(d => d.GetProperty("table_name").GetString() == "financeiro.Posicao"), Is.True);
+        }
+        finally
+        {
+            DropDatabaseIfExists(tempDatabase);
+        }
+    }
+
+    private static void CreateCompareDatabase(string databaseName)
+    {
+        using var master = new SqlConnection($"Server={TestDatabase.InstanceName};Database=master;Integrated Security=SSPI;TrustServerCertificate=True");
+        master.Open();
+        Execute(master, $"CREATE DATABASE [{databaseName}];");
+
+        using var db = new SqlConnection($"Server={TestDatabase.InstanceName};Database={databaseName};Integrated Security=SSPI;TrustServerCertificate=True");
+        db.Open();
+
+        Execute(db, "CREATE SCHEMA financeiro;");
+        Execute(db, """
+            CREATE TABLE financeiro.Posicao (
+                PosicaoId     INT NOT NULL IDENTITY(1,1),
+                InstrumentoId INT NOT NULL,
+                Quantidade    DECIMAL(18,4) NOT NULL,
+                DataRef       DATE NOT NULL,
+                CONSTRAINT PK_Posicao PRIMARY KEY (PosicaoId)
+            );
+            """);
+    }
+
+    private static void DropDatabaseIfExists(string databaseName)
+    {
+        using var conn = new SqlConnection($"Server={TestDatabase.InstanceName};Database=master;Integrated Security=SSPI;TrustServerCertificate=True");
+        conn.Open();
+
+        Execute(conn, $"""
+            IF EXISTS (SELECT 1 FROM sys.databases WHERE name = '{databaseName}')
+            BEGIN
+                ALTER DATABASE [{databaseName}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+                DROP DATABASE [{databaseName}];
+            END
+            """);
+    }
+
+    private static void Execute(SqlConnection conn, string sql)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.ExecuteNonQuery();
+    }
 }

@@ -45,16 +45,24 @@ with no warranties of any kind.
 | Tool | Description |
 |------|-------------|
 | `list_databases` | Databases registered in the configuration |
+| `get_database_overview` | High-level database summary (counts, size, connection metadata) |
+| `get_schema_summary` | Aggregated metrics by schema (objects, rows, size) |
 | `list_schemas` | Schemas in a database (excluding system schemas) |
-| `list_tables` | User tables with schema and approximate row count |
+| `list_tables` | User tables with schema, dates, approximate rows and estimated size |
 | `list_views` | User views |
-| `list_procedures` | User stored procedures |
-| `list_functions` | User-defined functions (scalar, inline table-valued, multi-statement table-valued) |
-| `get_table_schema` | Columns, PKs, FKs and indexes of a table |
+| `list_procedures` | User stored procedures (with basic complexity metrics) |
+| `list_functions` | User-defined functions (with basic complexity metrics) |
+| `get_table_schema` | Columns, PKs, FKs, checks, uniques, indexes and computed/collation metadata |
 | `get_view_definition` | DDL definition + columns of a view |
 | `get_procedure_definition` | CREATE PROCEDURE text |
 | `get_function_definition` | CREATE FUNCTION text |
-| `query_table` | SELECT from a table or view with filtering, sorting and pagination |
+| `get_dependency_graph` | Object dependency edges (FK + SQL dependencies) |
+| `get_table_usage` | References to a table across FKs and SQL modules |
+| `get_data_profile` | Column profile (null ratio, distinct count, min/max, top values) |
+| `get_index_health` | Duplicate/unused index diagnostics + missing-index suggestions |
+| `compare_schemas` | Compares table/column structure between two configured databases |
+| `generate_dependency_dot` | Graphviz DOT dependency graph with node metadata (`node_kind`) |
+| `query_table` | SELECT from a table or view with filtering, grouping, secure aggregates, sorting, sampling and pagination |
 
 ## Configuration
 
@@ -75,11 +83,13 @@ as a JSON object mapping database names to their configurations.
 {
   "RiskSystem": {
     "connection_string": "Server=.\\DEV;Database=RiskSystem;Integrated Security=SSPI",
-    "max_query_rows": 10000
+    "max_query_rows": 10000,
+    "default_timeout_seconds": 30
   },
   "Reports": {
     "connection_string": "Server=.\\PROD;Database=Reports;User Id=%{DB_USER};Password=%{DB_PASS}",
-    "max_query_rows": 1000
+    "max_query_rows": 1000,
+    "default_timeout_seconds": 60
   }
 }
 ```

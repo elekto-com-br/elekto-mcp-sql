@@ -47,10 +47,8 @@ public sealed class TestDatabase : IDisposable
         using var conn = new SqlConnection(ConnectionString);
         conn.Open();
 
-        // Extra schema for schema-filter tests
         Execute(conn, "CREATE SCHEMA financeiro;");
 
-        // Main table covering all relevant metadata types
         Execute(conn, """
             CREATE TABLE dbo.Instrumento (
                 InstrumentoId   INT           NOT NULL IDENTITY(1,1),
@@ -60,7 +58,8 @@ public sealed class TestDatabase : IDisposable
                 PrecoCusto      DECIMAL(18,6) NOT NULL DEFAULT 0,
                 Ativo           BIT           NOT NULL DEFAULT 1,
                 CONSTRAINT PK_Instrumento PRIMARY KEY (InstrumentoId),
-                CONSTRAINT UQ_Instrumento_Codigo UNIQUE (Codigo)
+                CONSTRAINT UQ_Instrumento_Codigo UNIQUE (Codigo),
+                CONSTRAINT CK_Instrumento_PrecoCusto CHECK (PrecoCusto >= 0)
             );
             """);
 
@@ -76,14 +75,16 @@ public sealed class TestDatabase : IDisposable
                 'SCHEMA', 'dbo', 'TABLE', 'Instrumento', 'COLUMN', 'InstrumentoId';
             """);
 
-        // Table in the financeiro schema for schema-filter tests
         Execute(conn, """
             CREATE TABLE financeiro.Posicao (
-                PosicaoId     INT          NOT NULL IDENTITY(1,1),
-                InstrumentoId INT          NOT NULL,
-                Quantidade    DECIMAL(18,6) NOT NULL,
-                DataRef       DATE         NOT NULL,
+                PosicaoId      INT            NOT NULL IDENTITY(1,1),
+                InstrumentoId  INT            NOT NULL,
+                Quantidade     DECIMAL(18,6)  NOT NULL,
+                PrecoUnitario  DECIMAL(18,6)  NOT NULL DEFAULT 0,
+                ValorMercado   AS (Quantidade * PrecoUnitario),
+                DataRef        DATE           NOT NULL,
                 CONSTRAINT PK_Posicao PRIMARY KEY (PosicaoId),
+                CONSTRAINT CK_Posicao_Quantidade CHECK (Quantidade >= 0),
                 CONSTRAINT FK_Posicao_Instrumento
                     FOREIGN KEY (InstrumentoId)
                     REFERENCES dbo.Instrumento (InstrumentoId)
@@ -91,9 +92,26 @@ public sealed class TestDatabase : IDisposable
             );
             """);
 
-        Execute(conn, "CREATE INDEX IX_Posicao_DataRef ON financeiro.Posicao (DataRef DESC);");
+        Execute(conn, """
+            CREATE TABLE financeiro.MovimentoPosicao (
+                MovimentoId   INT           NOT NULL IDENTITY(1,1),
+                PosicaoId     INT           NOT NULL,
+                Tipo          CHAR(1)       NOT NULL,
+                Quantidade    DECIMAL(18,6) NOT NULL,
+                DataEvento    DATETIME2     NOT NULL,
+                CONSTRAINT PK_MovimentoPosicao PRIMARY KEY (MovimentoId),
+                CONSTRAINT CK_MovimentoPosicao_Tipo CHECK (Tipo IN ('C','V')),
+                CONSTRAINT FK_MovimentoPosicao_Posicao
+                    FOREIGN KEY (PosicaoId)
+                    REFERENCES financeiro.Posicao (PosicaoId)
+                    ON DELETE CASCADE
+            );
+            """);
 
-        // Simple view
+        Execute(conn, "CREATE INDEX IX_Posicao_DataRef ON financeiro.Posicao (DataRef DESC);");
+        Execute(conn, "CREATE INDEX IX_Posicao_Instrumento ON financeiro.Posicao (InstrumentoId);");
+        Execute(conn, "CREATE INDEX IX_Posicao_Instrumento_Duplicado ON financeiro.Posicao (InstrumentoId);");
+
         Execute(conn, """
             CREATE VIEW dbo.vw_InstrumentosAtivos AS
             SELECT InstrumentoId, Codigo, Descricao, DataVencimento
@@ -101,19 +119,19 @@ public sealed class TestDatabase : IDisposable
             WHERE  Ativo = 1;
             """);
 
-        // View in the financeiro schema
         Execute(conn, """
             CREATE VIEW financeiro.vw_PosicaoDetalhada AS
             SELECT p.PosicaoId,
                    p.DataRef,
                    i.Codigo,
                    i.Descricao,
-                   p.Quantidade
+                   p.Quantidade,
+                   p.PrecoUnitario,
+                   p.ValorMercado
             FROM   financeiro.Posicao p
             JOIN   dbo.Instrumento    i ON p.InstrumentoId = i.InstrumentoId;
             """);
 
-        // Stored procedure
         Execute(conn, """
             CREATE PROCEDURE dbo.sp_ObterInstrumento
                 @InstrumentoId INT
@@ -126,7 +144,22 @@ public sealed class TestDatabase : IDisposable
             END;
             """);
 
-        // Scalar function
+        Execute(conn, """
+            CREATE PROCEDURE financeiro.sp_ResumoPosicao
+                @DataRef DATE
+            AS
+            BEGIN
+                SET NOCOUNT ON;
+                SELECT i.Codigo,
+                       SUM(p.Quantidade) AS QuantidadeTotal,
+                       SUM(p.ValorMercado) AS ValorTotal
+                FROM financeiro.Posicao p
+                INNER JOIN dbo.Instrumento i ON i.InstrumentoId = p.InstrumentoId
+                WHERE p.DataRef = @DataRef
+                GROUP BY i.Codigo;
+            END;
+            """);
+
         Execute(conn, """
             CREATE FUNCTION dbo.fn_DiasParaVencimento (@DataVencimento DATE)
             RETURNS INT
@@ -136,7 +169,6 @@ public sealed class TestDatabase : IDisposable
             END;
             """);
 
-        // Inline table-valued function
         Execute(conn, """
             CREATE FUNCTION dbo.fn_InstrumentosVencendoEm (@Dias INT)
             RETURNS TABLE
@@ -149,7 +181,23 @@ public sealed class TestDatabase : IDisposable
             );
             """);
 
-        // Sample data for query_table tests
+        Execute(conn, """
+            CREATE FUNCTION financeiro.fn_PosicoesAcimaDe (@ValorMinimo DECIMAL(18,6))
+            RETURNS @Resultado TABLE
+            (
+                PosicaoId INT NOT NULL,
+                ValorMercado DECIMAL(18,6) NOT NULL
+            )
+            AS
+            BEGIN
+                INSERT INTO @Resultado (PosicaoId, ValorMercado)
+                SELECT p.PosicaoId, p.ValorMercado
+                FROM financeiro.Posicao p
+                WHERE p.ValorMercado >= @ValorMinimo;
+                RETURN;
+            END;
+            """);
+
         Execute(conn, """
             INSERT INTO dbo.Instrumento (Codigo, Descricao, DataVencimento, PrecoCusto, Ativo)
             VALUES
@@ -161,11 +209,19 @@ public sealed class TestDatabase : IDisposable
             """);
 
         Execute(conn, """
-            INSERT INTO financeiro.Posicao (InstrumentoId, Quantidade, DataRef)
+            INSERT INTO financeiro.Posicao (InstrumentoId, Quantidade, PrecoUnitario, DataRef)
             VALUES
-                (1, 1000.000000, '2025-01-02'),
-                (2,  500.000000, '2025-01-02'),
-                (4,  250.000000, '2025-01-02');
+                (1, 1000.000000, 37.10, '2025-01-02'),
+                (2,  500.000000, 69.90, '2025-01-02'),
+                (4,  250.000000, 34.00, '2025-01-02');
+            """);
+
+        Execute(conn, """
+            INSERT INTO financeiro.MovimentoPosicao (PosicaoId, Tipo, Quantidade, DataEvento)
+            VALUES
+                (1, 'C', 1000.000000, '2025-01-02T10:00:00'),
+                (2, 'C', 500.000000, '2025-01-02T10:00:00'),
+                (3, 'C', 250.000000, '2025-01-02T10:00:00');
             """);
     }
 

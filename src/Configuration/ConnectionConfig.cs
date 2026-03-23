@@ -14,6 +14,7 @@ public sealed class DatabaseEntry
 {
     public string ConnectionString { get; init; } = "";
     public int MaxQueryRows { get; init; } = 10_000;
+    public int DefaultTimeoutSeconds { get; init; } = 30;
 }
 
 /// <summary>
@@ -63,6 +64,7 @@ public sealed class ConnectionConfig
         {
             string rawConnStr;
             int maxRows = 10_000;
+            int defaultTimeoutSeconds = 30;
 
             // Accepts both a plain string and an object { connection_string, max_query_rows }
             if (element.ValueKind == JsonValueKind.String)
@@ -75,14 +77,27 @@ public sealed class ConnectionConfig
                     ?? throw new InvalidOperationException($"'{name}': 'connection_string' is missing or null.");
                 if (element.TryGetProperty("max_query_rows", out var maxEl))
                     maxRows = maxEl.GetInt32();
+                if (element.TryGetProperty("default_timeout_seconds", out var timeoutEl))
+                    defaultTimeoutSeconds = timeoutEl.GetInt32();
             }
             else
             {
                 throw new InvalidOperationException($"'{name}': value must be a string or an object.");
             }
 
+            if (maxRows <= 0)
+                throw new InvalidOperationException($"'{name}': 'max_query_rows' must be greater than zero.");
+
+            if (defaultTimeoutSeconds <= 0)
+                throw new InvalidOperationException($"'{name}': 'default_timeout_seconds' must be greater than zero.");
+
             var connStr = ExpandVariables(rawConnStr, name);
-            result[name] = new DatabaseEntry { ConnectionString = connStr, MaxQueryRows = maxRows };
+            result[name] = new DatabaseEntry
+            {
+                ConnectionString = connStr,
+                MaxQueryRows = maxRows,
+                DefaultTimeoutSeconds = defaultTimeoutSeconds
+            };
         }
 
         return new ConnectionConfig(result);
