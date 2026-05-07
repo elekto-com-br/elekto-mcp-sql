@@ -66,46 +66,100 @@ with no warranties of any kind.
 
 ## Configuration
 
-Configuration is provided via the `MCP_SQL_CONNECTIONS` environment variable,
-as a JSON object mapping database names to their configurations.
+Connections are defined in a JSON file and the path to that file is passed via the
+`--connections` argument. This avoids the need to embed and escape JSON inside `.mcp.json`.
 
-### Simple format (direct connection string)
+### Connection file format
+
+The file is a JSON object mapping logical database names to their configurations.
+
+**Simple format** (direct connection string):
 
 ```json
 {
-  "RiskSystem": "Server=.\\DEV;Database=RiskSystem;Integrated Security=SSPI"
+  "MyDatabase": "Server=SQLSRV01\\INST;Database=MyDatabase;Integrated Security=SSPI"
 }
 ```
 
-### Full format (with options)
+**Full format** (with options):
 
 ```json
 {
-  "RiskSystem": {
-    "connection_string": "Server=.\\DEV;Database=RiskSystem;Integrated Security=SSPI",
-    "max_query_rows": 10000,
+  "MyDatabase": {
+    "connection_string": "Server=SQLSRV01\\INST;Database=MyDatabase;Integrated Security=SSPI",
+    "max_query_rows": 5000,
     "default_timeout_seconds": 30
-  },
-  "Reports": {
-    "connection_string": "Server=.\\PROD;Database=Reports;User Id=%{DB_USER};Password=%{DB_PASS}",
-    "max_query_rows": 1000,
-    "default_timeout_seconds": 60
   }
 }
 ```
 
-### Environment variable expansion
+Both formats can be mixed in the same file. See [`sample-connections.json`](sample-connections.json)
+for a ready-to-use example.
+
+### Options per database
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `connection_string` | string | required | SQL Server connection string |
+| `max_query_rows` | integer | 10 000 | Maximum rows returned per query call |
+| `default_timeout_seconds` | integer | 30 | SQL command timeout in seconds |
+
+### Environment variable expansion in connection strings
 
 Use `%{VARIABLE_NAME}` inside connection strings to avoid storing credentials in plain text.
 Variables are resolved from the process environment at server startup.
 
-Example: `%{DB_PASS}` is replaced by the value of `$env:DB_PASS`.
+```json
+{
+  "CRM": {
+    "connection_string": "Server=SQLSRV01;Database=CRM;User Id=%{CRM_DB_USER};Password=%{CRM_DB_PASS}",
+    "max_query_rows": 2000
+  }
+}
+```
 
-If a referenced variable does not exist, the server fails with an explicit error message.
+`%{CRM_DB_USER}` and `%{CRM_DB_PASS}` are replaced by the values of the corresponding
+OS environment variables. If a referenced variable does not exist, the server fails with
+an explicit error message.
+
+### Fallback: MCP_SQL_CONNECTIONS environment variable
+
+If `--connections` is not supplied, the server falls back to reading the
+`MCP_SQL_CONNECTIONS` environment variable, which must contain the JSON directly.
+This is provided for backward compatibility; the file-based approach is recommended.
 
 ## Visual Studio 2026 Setup (.mcp.json)
 
-Create or edit `.mcp.json` at the solution root (or in your user profile for global use):
+Create or edit `.mcp.json` at the solution root (or in your user profile for global use).
+
+### Recommended: connection file
+
+Store your connections in a file (e.g., `%USERPROFILE%\sql-connections.json`) and point
+the server to it via `--connections`. No JSON escaping required:
+
+```json
+{
+  "servers": {
+    "sql": {
+      "type": "stdio",
+      "command": "dotnet",
+      "args": [
+        "D:\\Tools\\Elekto.Mcp.Sql\\Elekto.Mcp.Sql.dll",
+        "--connections",
+        "C:\\Users\\YourName\\sql-connections.json"
+      ]
+    }
+  }
+}
+```
+
+The connection file itself stays outside the repository, so credentials are never
+committed to source control.
+
+### Alternative: environment variable (legacy)
+
+If you prefer not to use a file, you can still pass the JSON via an environment variable.
+Note that backslashes require double escaping inside JSON-within-JSON (`\\\\`):
 
 ```json
 {
@@ -115,25 +169,12 @@ Create or edit `.mcp.json` at the solution root (or in your user profile for glo
       "command": "dotnet",
       "args": ["D:\\Tools\\Elekto.Mcp.Sql\\Elekto.Mcp.Sql.dll"],
       "env": {
-        "MCP_SQL_CONNECTIONS": "{\"RiskSystem\": {\"connection_string\": \"Server=.\\\\DEV;Database=RiskSystem;Integrated Security=SSPI\"}}"
+        "MCP_SQL_CONNECTIONS": "{\"MyDb\": {\"connection_string\": \"Server=SQLSRV01\\\\INST;Database=MyDb;Integrated Security=SSPI\"}}"
       }
     }
   }
 }
 ```
-
-Tips:
-- Backslashes inside JSON require double escaping (`\\\\` in JSON-within-JSON).
-- For connection strings with credentials, prefer environment variables:
-  ```json
-  "env": {
-    "MCP_SQL_CONNECTIONS": "{\"DB\": {\"connection_string\": \"...User Id=%{DB_USER};Password=%{DB_PASS}\"}}",
-    "DB_USER": "user",
-    "DB_PASS": "%{PASSWORD_IN_SYSTEM}"
-  }
-  ```
-  Or set `DB_USER` and `DB_PASS` directly in the OS environment, without declaring them
-  in `.mcp.json`.
 
 After saving `.mcp.json`, Copilot automatically restarts the server.
 Tools are disabled by default: enable them in the Copilot Chat tools panel.

@@ -18,7 +18,8 @@ public sealed class DatabaseEntry
 }
 
 /// <summary>
-/// Loads and validates connection configuration from the <c>MCP_SQL_CONNECTIONS</c> environment variable.
+/// Loads and validates connection configuration from a JSON file (via <c>--connections</c> argument)
+/// or from the <c>MCP_SQL_CONNECTIONS</c> environment variable as fallback.
 /// Supports environment variable expansion using <c>%{VARIABLE_NAME}</c> syntax inside connection strings.
 /// </summary>
 public sealed class ConnectionConfig
@@ -36,26 +37,56 @@ public sealed class ConnectionConfig
     }
 
     /// <summary>
-    /// Loads the configuration. Throws <see cref="InvalidOperationException"/> if the variable is
-    /// not defined or the JSON is invalid. Throws <see cref="ArgumentException"/> if a referenced
-    /// environment variable does not exist.
+    /// Loads configuration from a JSON file at the given path.
+    /// Throws <see cref="InvalidOperationException"/> if the file does not exist or the JSON is invalid.
+    /// Throws <see cref="ArgumentException"/> if a referenced environment variable does not exist.
+    /// </summary>
+    public static ConnectionConfig LoadFromFile(string filePath)
+    {
+        if (!File.Exists(filePath))
+            throw new InvalidOperationException(
+                $"Connections file not found: '{filePath}'.");
+
+        string json;
+        try
+        {
+            json = File.ReadAllText(filePath);
+        }
+        catch (IOException ex)
+        {
+            throw new InvalidOperationException(
+                $"Failed to read connections file '{filePath}': {ex.Message}", ex);
+        }
+
+        return ParseJson(json, $"file '{filePath}'");
+    }
+
+    /// <summary>
+    /// Loads configuration from the <c>MCP_SQL_CONNECTIONS</c> environment variable.
+    /// Throws <see cref="InvalidOperationException"/> if the variable is not defined or the JSON is invalid.
+    /// Throws <see cref="ArgumentException"/> if a referenced environment variable does not exist.
     /// </summary>
     public static ConnectionConfig Load()
     {
         var raw = Environment.GetEnvironmentVariable(EnvVarName)
             ?? throw new InvalidOperationException(
-                $"Environment variable '{EnvVarName}' is not defined. " +
-                "Set it to a JSON object mapping database names to their configurations.");
+                $"Environment variable '{EnvVarName}' is not defined and no --connections file was specified. " +
+                "Pass --connections <path> or set the environment variable to a JSON object.");
 
+        return ParseJson(raw, $"environment variable '{EnvVarName}'");
+    }
+
+    private static ConnectionConfig ParseJson(string json, string source)
+    {
         Dictionary<string, JsonElement> parsed;
         try
         {
-            parsed = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(raw)
+            parsed = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json)
                 ?? throw new InvalidOperationException("Empty or null JSON.");
         }
         catch (JsonException ex)
         {
-            throw new InvalidOperationException($"Invalid JSON in '{EnvVarName}': {ex.Message}", ex);
+            throw new InvalidOperationException($"Invalid JSON in {source}: {ex.Message}", ex);
         }
 
         var result = new Dictionary<string, DatabaseEntry>(StringComparer.OrdinalIgnoreCase);

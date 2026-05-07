@@ -11,7 +11,7 @@ public class ConnectionConfigTests
     public void Cleanup() => Environment.SetEnvironmentVariable(EnvVar, null);
 
     // -------------------------------------------------------------------------
-    // Formato simples (string de conexão direta)
+    // Formato simples (string de conexão direta) — via variável de ambiente
     // -------------------------------------------------------------------------
 
     [Test]
@@ -151,7 +151,7 @@ public class ConnectionConfigTests
     }
 
     // -------------------------------------------------------------------------
-    // Erros de configuração
+    // Erros de configuração — variável de ambiente
     // -------------------------------------------------------------------------
 
     [Test]
@@ -179,5 +179,128 @@ public class ConnectionConfigTests
 
         Assert.That(config.Databases.ContainsKey("risksystem"), Is.True);
         Assert.That(config.Databases.ContainsKey("RISKSYSTEM"), Is.True);
+    }
+
+    // -------------------------------------------------------------------------
+    // LoadFromFile — carregamento via arquivo
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public void LoadFromFile_SimpleString_ParsesConnectionString()
+    {
+        var path = WriteTempFile("""{"MyDb": "Server=.;Database=Test;Integrated Security=SSPI"}""");
+        try
+        {
+            var config = ConnectionConfig.LoadFromFile(path);
+
+            Assert.That(config.Databases, Contains.Key("MyDb"));
+            Assert.That(config.Databases["MyDb"].ConnectionString,
+                Is.EqualTo("Server=.;Database=Test;Integrated Security=SSPI"));
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Test]
+    public void LoadFromFile_ObjectFormat_ParsesAllFields()
+    {
+        var path = WriteTempFile("""
+            {
+              "MyDb": {
+                "connection_string": "Server=.;Database=Test;Integrated Security=SSPI",
+                "max_query_rows": 250,
+                "default_timeout_seconds": 90
+              }
+            }
+            """);
+        try
+        {
+            var config = ConnectionConfig.LoadFromFile(path);
+
+            Assert.That(config.Databases["MyDb"].MaxQueryRows, Is.EqualTo(250));
+            Assert.That(config.Databases["MyDb"].DefaultTimeoutSeconds, Is.EqualTo(90));
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Test]
+    public void LoadFromFile_MultipleDatabases_RegistersAll()
+    {
+        var path = WriteTempFile("""
+            {
+              "Alpha": "Server=.;Database=A;Integrated Security=SSPI",
+              "Beta":  "Server=.;Database=B;Integrated Security=SSPI"
+            }
+            """);
+        try
+        {
+            var config = ConnectionConfig.LoadFromFile(path);
+
+            Assert.That(config.Databases.Keys, Is.EquivalentTo(new[] { "Alpha", "Beta" }));
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Test]
+    public void LoadFromFile_VariableExpansion_ReplacesPlaceholder()
+    {
+        Environment.SetEnvironmentVariable("TEST_MCP_FILE_PASS", "p4ss");
+        var path = WriteTempFile(
+            """{"MyDb": "Server=.;Password=%{TEST_MCP_FILE_PASS}"}""");
+        try
+        {
+            var config = ConnectionConfig.LoadFromFile(path);
+
+            Assert.That(config.Databases["MyDb"].ConnectionString,
+                Is.EqualTo("Server=.;Password=p4ss"));
+        }
+        finally
+        {
+            File.Delete(path);
+            Environment.SetEnvironmentVariable("TEST_MCP_FILE_PASS", null);
+        }
+    }
+
+    [Test]
+    public void LoadFromFile_FileMissing_ThrowsInvalidOperationException()
+    {
+        Assert.Throws<InvalidOperationException>(() =>
+            ConnectionConfig.LoadFromFile("nonexistent_connections_file_xyz.json"));
+    }
+
+    [Test]
+    public void LoadFromFile_InvalidJson_ThrowsInvalidOperationException()
+    {
+        var path = WriteTempFile("not json at all");
+        try
+        {
+            Assert.Throws<InvalidOperationException>(() => ConnectionConfig.LoadFromFile(path));
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Test]
+    public void LoadFromFile_LookupIsCaseInsensitive()
+    {
+        var path = WriteTempFile(
+            """{"RiskSystem": "Server=.;Database=Risk;Integrated Security=SSPI"}""");
+        try
+        {
+            var config = ConnectionConfig.LoadFromFile(path);
+
+            Assert.That(config.Databases.ContainsKey("risksystem"), Is.True);
+            Assert.That(config.Databases.ContainsKey("RISKSYSTEM"), Is.True);
+        }
+        finally { File.Delete(path); }
+    }
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+
+    private static string WriteTempFile(string content)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mcp_test_{Guid.NewGuid():N}.json");
+        File.WriteAllText(path, content);
+        return path;
     }
 }

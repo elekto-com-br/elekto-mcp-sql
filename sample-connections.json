@@ -1,0 +1,18 @@
+{
+  "ERP": {
+    "connection_string": "Server=SQLPRD01\\INSTPRD;Database=ERP;Integrated Security=SSPI",
+    "max_query_rows": 5000,
+    "default_timeout_seconds": 30
+  },
+  "DataWarehouse": {
+    "connection_string": "Server=SQLPRD01\\INSTPRD;Database=DataWarehouse;Integrated Security=SSPI",
+    "max_query_rows": 20000,
+    "default_timeout_seconds": 120
+  },
+  "CRM": {
+    "connection_string": "Server=SQLPRD02\\INSTPRD;Database=CRM;User Id=%{CRM_DB_USER};Password=%{CRM_DB_PASS}",
+    "max_query_rows": 2000,
+    "default_timeout_seconds": 30
+  },
+  "DevSandbox": "Server=SQLDEV01\\SQLEXPRESS;Database=Sandbox;Integrated Security=SSPI"
+}

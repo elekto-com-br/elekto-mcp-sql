@@ -16,11 +16,15 @@ builder.Logging.AddConsole(options =>
     options.LogToStandardErrorThreshold = LogLevel.Trace;
 });
 
-// Loads and validates configuration before starting the host
+// Loads and validates configuration before starting the host.
+// Priority: --connections <path> argument > MCP_SQL_CONNECTIONS environment variable.
 ConnectionConfig config;
 try
 {
-    config = ConnectionConfig.Load();
+    var connectionsFile = ParseConnectionsArg(args);
+    config = connectionsFile is not null
+        ? ConnectionConfig.LoadFromFile(connectionsFile)
+        : ConnectionConfig.Load();
 }
 catch (Exception ex)
 {
@@ -39,3 +43,12 @@ builder.Services
 
 await builder.Build().RunAsync();
 return 0;
+
+// Scans args for --connections <path> and returns the path, or null if not present.
+static string? ParseConnectionsArg(string[] args)
+{
+    for (var i = 0; i < args.Length - 1; i++)
+        if (args[i] is "--connections" or "-c")
+            return args[i + 1];
+    return null;
+}
