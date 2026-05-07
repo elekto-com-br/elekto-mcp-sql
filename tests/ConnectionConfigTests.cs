@@ -294,32 +294,55 @@ public class ConnectionConfigTests
     }
 
     // -------------------------------------------------------------------------
-    // Discover() — cadeia de descoberta automática
+    // Discover() — merge de todas as fontes por prioridade
     // -------------------------------------------------------------------------
 
     [Test]
-    public void Discover_LocalFileInWorkingDir_TakesPriority()
+    public void Discover_MergesBothLocalFiles_UniqueNames()
     {
+        // Nomes diferentes em home e projeto: ambos aparecem no resultado
         var dir = MakeTempDir();
         var homedir = MakeTempDir();
         try
         {
-            WriteFile(dir, ConnectionConfig.LocalFileName,
-                """{"WorkDb": "Server=.;Database=Work;Integrated Security=SSPI"}""");
             WriteFile(homedir, ConnectionConfig.LocalFileName,
-                """{"HomeDb": "Server=.;Database=Home;Integrated Security=SSPI"}""");
+                """{"HomeDb": "Server=HOME;Database=H;Integrated Security=SSPI"}""");
+            WriteFile(dir, ConnectionConfig.LocalFileName,
+                """{"WorkDb": "Server=PROJ;Database=W;Integrated Security=SSPI"}""");
 
             var (config, source) = ConnectionConfig.Discover(dir, homedir);
 
+            Assert.That(config.Databases, Contains.Key("HomeDb"));
             Assert.That(config.Databases, Contains.Key("WorkDb"));
-            Assert.That(config.Databases, Does.Not.ContainKey("HomeDb"));
-            Assert.That(source, Does.Contain(ConnectionConfig.LocalFileName));
+            Assert.That(source, Does.Contain("(~)"));
+            Assert.That(source, Does.Contain("(project)"));
         }
         finally { DeleteDir(dir); DeleteDir(homedir); }
     }
 
     [Test]
-    public void Discover_LocalFileInHomeDir_UsedWhenNoWorkingDirFile()
+    public void Discover_ProjectLocalFile_OverridesHomeFile_SameName()
+    {
+        // Mesmo nome nas duas fontes: projeto vence
+        var dir = MakeTempDir();
+        var homedir = MakeTempDir();
+        try
+        {
+            WriteFile(homedir, ConnectionConfig.LocalFileName,
+                """{"SharedDb": "Server=HOME;Database=Shared;Integrated Security=SSPI"}""");
+            WriteFile(dir, ConnectionConfig.LocalFileName,
+                """{"SharedDb": "Server=PROJECT;Database=Shared;Integrated Security=SSPI"}""");
+
+            var (config, _) = ConnectionConfig.Discover(dir, homedir);
+
+            Assert.That(config.Databases["SharedDb"].ConnectionString,
+                Does.Contain("Server=PROJECT"));
+        }
+        finally { DeleteDir(dir); DeleteDir(homedir); }
+    }
+
+    [Test]
+    public void Discover_LocalFileInHomeDir_ContributesWhenNoProjectFile()
     {
         var dir = MakeTempDir();
         var homedir = MakeTempDir();
@@ -361,6 +384,7 @@ public class ConnectionConfigTests
     [Test]
     public void Discover_AppSettingsDevelopmentJson_OverridesAppSettings()
     {
+        // Development sobrescreve appsettings.json para o mesmo nome
         var dir = MakeTempDir();
         var homedir = MakeTempDir();
         try
@@ -382,11 +406,75 @@ public class ConnectionConfigTests
 
             var (config, _) = ConnectionConfig.Discover(dir, homedir);
 
-            // Development deve sobrescrever o valor de appsettings.json
             Assert.That(config.Databases["AppDb"].ConnectionString,
                 Does.Contain("Server=DEV"));
         }
         finally { DeleteDir(dir); DeleteDir(homedir); }
+    }
+
+    [Test]
+    public void Discover_ProjectLocalFile_OverridesAppSettings_SameName()
+    {
+        // .elekto.mcp.conn.local.json do projeto tem prioridade sobre appsettings
+        var dir = MakeTempDir();
+        var homedir = MakeTempDir();
+        try
+        {
+            WriteFile(dir, "appsettings.json", """
+                {
+                  "ConnectionStrings": {
+                    "SharedDb": "Server=APPSETTINGS;Database=D;Integrated Security=SSPI"
+                  }
+                }
+                """);
+            WriteFile(dir, ConnectionConfig.LocalFileName,
+                """{"SharedDb": "Server=LOCAL;Database=D;Integrated Security=SSPI"}""");
+
+            var (config, _) = ConnectionConfig.Discover(dir, homedir);
+
+            Assert.That(config.Databases["SharedDb"].ConnectionString,
+                Does.Contain("Server=LOCAL"));
+        }
+        finally { DeleteDir(dir); DeleteDir(homedir); }
+    }
+
+    [Test]
+    public void Discover_AllSourcesMerged_UniqueNamesAccumulate()
+    {
+        // Cada fonte contribui com um nome diferente: todos aparecem
+        var dir = MakeTempDir();
+        var homedir = MakeTempDir();
+        Environment.SetEnvironmentVariable(EnvVar,
+            """{"EnvDb": "Server=.;Database=Env;Integrated Security=SSPI"}""");
+        try
+        {
+            WriteFile(homedir, ConnectionConfig.LocalFileName,
+                """{"HomeDb": "Server=.;Database=Home;Integrated Security=SSPI"}""");
+            WriteFile(dir, "appsettings.json", """
+                {
+                  "ConnectionStrings": {
+                    "AppDb": "Server=.;Database=App;Integrated Security=SSPI"
+                  }
+                }
+                """);
+            WriteFile(dir, ConnectionConfig.LocalFileName,
+                """{"WorkDb": "Server=.;Database=Work;Integrated Security=SSPI"}""");
+
+            var (config, source) = ConnectionConfig.Discover(dir, homedir);
+
+            Assert.That(config.Databases, Contains.Key("EnvDb"));
+            Assert.That(config.Databases, Contains.Key("HomeDb"));
+            Assert.That(config.Databases, Contains.Key("AppDb"));
+            Assert.That(config.Databases, Contains.Key("WorkDb"));
+            // Source deve listar todas as origens que contribuíram
+            Assert.That(source, Does.Contain(EnvVar));
+            Assert.That(source, Does.Contain("appsettings.json"));
+        }
+        finally
+        {
+            DeleteDir(dir);
+            DeleteDir(homedir);
+        }
     }
 
     [Test]
@@ -440,7 +528,7 @@ public class ConnectionConfigTests
     }
 
     [Test]
-    public void Discover_FallsBackToEnvVar_WhenNoFilesFound()
+    public void Discover_EnvVar_ContributesWhenNoFilesFound()
     {
         var dir = MakeTempDir();
         var homedir = MakeTempDir();
@@ -453,11 +541,7 @@ public class ConnectionConfigTests
             Assert.That(config.Databases, Contains.Key("EnvDb"));
             Assert.That(source, Does.Contain(EnvVar));
         }
-        finally
-        {
-            DeleteDir(dir);
-            DeleteDir(homedir);
-        }
+        finally { DeleteDir(dir); DeleteDir(homedir); }
     }
 
     [Test]
@@ -465,7 +549,6 @@ public class ConnectionConfigTests
     {
         var dir = MakeTempDir();
         var homedir = MakeTempDir();
-        // Garante que a env var não está definida
         Environment.SetEnvironmentVariable(EnvVar, null);
         try
         {
