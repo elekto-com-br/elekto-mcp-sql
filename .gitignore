@@ -21,3 +21,6 @@ TestResults/
 
 # Claude Code
 .claude/settings.local.json
+
+# Arquivo local de conexões (nunca versionar — contém credenciais)
+.elekto.mcp.conn.local.json

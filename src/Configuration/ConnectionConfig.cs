@@ -4,6 +4,7 @@
 
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 
 namespace Elekto.Mcp.Sql.Configuration;
 
@@ -18,13 +19,16 @@ public sealed class DatabaseEntry
 }
 
 /// <summary>
-/// Loads and validates connection configuration from a JSON file (via <c>--connections</c> argument)
-/// or from the <c>MCP_SQL_CONNECTIONS</c> environment variable as fallback.
+/// Loads and validates connection configuration. Supports multiple sources via <see cref="Discover"/>.
 /// Supports environment variable expansion using <c>%{VARIABLE_NAME}</c> syntax inside connection strings.
 /// </summary>
 public sealed class ConnectionConfig
 {
+    /// <summary>Name of the environment variable used as fallback configuration source.</summary>
     public const string EnvVarName = "MCP_SQL_CONNECTIONS";
+
+    /// <summary>Name of the local connections file searched in the working and home directories.</summary>
+    public const string LocalFileName = ".elekto.mcp.conn.local.json";
 
     // Pattern to capture %{NAME} placeholders
     private static readonly Regex VarExpansionPattern = new(@"%\{([^}]+)\}", RegexOptions.Compiled);
@@ -35,6 +39,65 @@ public sealed class ConnectionConfig
     {
         Databases = databases;
     }
+
+    // -------------------------------------------------------------------------
+    // Auto-discovery
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Resolves connections by walking the following chain and returning the first match:
+    /// <list type="number">
+    ///   <item><see cref="LocalFileName"/> in <paramref name="workingDirectory"/> (defaults to <see cref="Directory.GetCurrentDirectory"/>)</item>
+    ///   <item><see cref="LocalFileName"/> in <paramref name="homeDirectory"/> (defaults to the user profile folder)</item>
+    ///   <item><c>ConnectionStrings</c> section in <c>appsettings.Development.json</c> / <c>appsettings.json</c></item>
+    ///   <item><c>&lt;connectionStrings&gt;</c> element in <c>web.config</c> / <c>App.config</c></item>
+    ///   <item><see cref="EnvVarName"/> environment variable</item>
+    /// </list>
+    /// Returns both the resolved <see cref="ConnectionConfig"/> and a human-readable description of the source.
+    /// Throws <see cref="InvalidOperationException"/> if nothing is found or JSON is invalid.
+    /// Throws <see cref="ArgumentException"/> if a referenced environment variable does not exist.
+    /// </summary>
+    public static (ConnectionConfig Config, string Source) Discover(
+        string? workingDirectory = null,
+        string? homeDirectory = null)
+    {
+        workingDirectory ??= Directory.GetCurrentDirectory();
+        homeDirectory ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+        // 1. Local file in the working directory (project root)
+        var localFile = Path.Combine(workingDirectory, LocalFileName);
+        if (File.Exists(localFile))
+            return (LoadFromFile(localFile), localFile);
+
+        // 2. Local file in the user home directory
+        var homeFile = Path.Combine(homeDirectory, LocalFileName);
+        if (File.Exists(homeFile))
+            return (LoadFromFile(homeFile), homeFile);
+
+        // 3. Connection strings from project config files
+        var (fromProject, projectSource) = TryLoadFromProjectFiles(workingDirectory);
+        if (fromProject is not null)
+            return (fromProject, projectSource!);
+
+        // 4. MCP_SQL_CONNECTIONS environment variable (backward compatibility)
+        var raw = Environment.GetEnvironmentVariable(EnvVarName);
+        if (raw is not null)
+        {
+            var source = $"environment variable '{EnvVarName}'";
+            return (ParseJson(raw, source), source);
+        }
+
+        throw new InvalidOperationException(
+            $"No connections found. Provide one of:\n" +
+            $"  • {LocalFileName} in the project or home directory\n" +
+            $"  • --connections <path>\n" +
+            $"  • ConnectionStrings section in appsettings.json / web.config\n" +
+            $"  • Environment variable '{EnvVarName}'");
+    }
+
+    // -------------------------------------------------------------------------
+    // Explicit sources
+    // -------------------------------------------------------------------------
 
     /// <summary>
     /// Loads configuration from a JSON file at the given path.
@@ -75,6 +138,89 @@ public sealed class ConnectionConfig
 
         return ParseJson(raw, $"environment variable '{EnvVarName}'");
     }
+
+    // -------------------------------------------------------------------------
+    // Project file discovery
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Scans known project config files in <paramref name="directory"/> for connection strings.
+    /// Processes files in precedence order: appsettings.json first, appsettings.Development.json
+    /// last (so Development values override general ones, matching .NET behaviour).
+    /// </summary>
+    private static (ConnectionConfig? Config, string? Source) TryLoadFromProjectFiles(string directory)
+    {
+        var result = new Dictionary<string, DatabaseEntry>(StringComparer.OrdinalIgnoreCase);
+        var sources = new List<string>();
+
+        // JSON: appsettings.json then appsettings.Development.json (Development wins on conflict)
+        foreach (var fileName in new[] { "appsettings.json", "appsettings.Development.json" })
+        {
+            var path = Path.Combine(directory, fileName);
+            if (!File.Exists(path)) continue;
+            try
+            {
+                var json = File.ReadAllText(path);
+                using var doc = JsonDocument.Parse(json);
+                if (!doc.RootElement.TryGetProperty("ConnectionStrings", out var cs) ||
+                    cs.ValueKind != JsonValueKind.Object) continue;
+
+                var added = false;
+                foreach (var prop in cs.EnumerateObject())
+                {
+                    var connStr = prop.Value.GetString();
+                    if (string.IsNullOrWhiteSpace(connStr)) continue;
+                    result[prop.Name] = new DatabaseEntry
+                    {
+                        ConnectionString = ExpandVariables(connStr, prop.Name)
+                    };
+                    added = true;
+                }
+                if (added && !sources.Contains(path))
+                    sources.Add(path);
+            }
+            catch (JsonException) { /* skip malformed */ }
+            catch (IOException) { /* skip unreadable */ }
+        }
+
+        // XML: web.config, App.config
+        foreach (var fileName in new[] { "web.config", "App.config" })
+        {
+            var path = Path.Combine(directory, fileName);
+            if (!File.Exists(path)) continue;
+            try
+            {
+                var doc = XDocument.Load(path);
+                var adds = doc.Root?.Element("connectionStrings")?.Elements("add");
+                if (adds is null) continue;
+
+                var added = false;
+                foreach (var el in adds)
+                {
+                    var name = el.Attribute("name")?.Value;
+                    var connStr = el.Attribute("connectionString")?.Value;
+                    if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(connStr)) continue;
+                    result[name] = new DatabaseEntry
+                    {
+                        ConnectionString = ExpandVariables(connStr, name)
+                    };
+                    added = true;
+                }
+                if (added && !sources.Contains(path))
+                    sources.Add(path);
+            }
+            catch (Exception ex) when (ex is System.Xml.XmlException or IOException) { /* skip malformed */ }
+        }
+
+        if (result.Count == 0)
+            return (null, null);
+
+        return (new ConnectionConfig(result), string.Join(" + ", sources.Select(Path.GetFileName)));
+    }
+
+    // -------------------------------------------------------------------------
+    // Shared parsing
+    // -------------------------------------------------------------------------
 
     private static ConnectionConfig ParseJson(string json, string source)
     {

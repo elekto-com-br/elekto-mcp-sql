@@ -294,6 +294,210 @@ public class ConnectionConfigTests
     }
 
     // -------------------------------------------------------------------------
+    // Discover() — cadeia de descoberta automática
+    // -------------------------------------------------------------------------
+
+    [Test]
+    public void Discover_LocalFileInWorkingDir_TakesPriority()
+    {
+        var dir = MakeTempDir();
+        var homedir = MakeTempDir();
+        try
+        {
+            WriteFile(dir, ConnectionConfig.LocalFileName,
+                """{"WorkDb": "Server=.;Database=Work;Integrated Security=SSPI"}""");
+            WriteFile(homedir, ConnectionConfig.LocalFileName,
+                """{"HomeDb": "Server=.;Database=Home;Integrated Security=SSPI"}""");
+
+            var (config, source) = ConnectionConfig.Discover(dir, homedir);
+
+            Assert.That(config.Databases, Contains.Key("WorkDb"));
+            Assert.That(config.Databases, Does.Not.ContainKey("HomeDb"));
+            Assert.That(source, Does.Contain(ConnectionConfig.LocalFileName));
+        }
+        finally { DeleteDir(dir); DeleteDir(homedir); }
+    }
+
+    [Test]
+    public void Discover_LocalFileInHomeDir_UsedWhenNoWorkingDirFile()
+    {
+        var dir = MakeTempDir();
+        var homedir = MakeTempDir();
+        try
+        {
+            WriteFile(homedir, ConnectionConfig.LocalFileName,
+                """{"HomeDb": "Server=.;Database=Home;Integrated Security=SSPI"}""");
+
+            var (config, _) = ConnectionConfig.Discover(dir, homedir);
+
+            Assert.That(config.Databases, Contains.Key("HomeDb"));
+        }
+        finally { DeleteDir(dir); DeleteDir(homedir); }
+    }
+
+    [Test]
+    public void Discover_AppSettingsJson_ParsesConnectionStrings()
+    {
+        var dir = MakeTempDir();
+        var homedir = MakeTempDir();
+        try
+        {
+            WriteFile(dir, "appsettings.json", """
+                {
+                  "ConnectionStrings": {
+                    "AppDb": "Server=.;Database=App;Integrated Security=SSPI"
+                  }
+                }
+                """);
+
+            var (config, source) = ConnectionConfig.Discover(dir, homedir);
+
+            Assert.That(config.Databases, Contains.Key("AppDb"));
+            Assert.That(source, Does.Contain("appsettings.json"));
+        }
+        finally { DeleteDir(dir); DeleteDir(homedir); }
+    }
+
+    [Test]
+    public void Discover_AppSettingsDevelopmentJson_OverridesAppSettings()
+    {
+        var dir = MakeTempDir();
+        var homedir = MakeTempDir();
+        try
+        {
+            WriteFile(dir, "appsettings.json", """
+                {
+                  "ConnectionStrings": {
+                    "AppDb": "Server=PROD;Database=App;Integrated Security=SSPI"
+                  }
+                }
+                """);
+            WriteFile(dir, "appsettings.Development.json", """
+                {
+                  "ConnectionStrings": {
+                    "AppDb": "Server=DEV;Database=App;Integrated Security=SSPI"
+                  }
+                }
+                """);
+
+            var (config, _) = ConnectionConfig.Discover(dir, homedir);
+
+            // Development deve sobrescrever o valor de appsettings.json
+            Assert.That(config.Databases["AppDb"].ConnectionString,
+                Does.Contain("Server=DEV"));
+        }
+        finally { DeleteDir(dir); DeleteDir(homedir); }
+    }
+
+    [Test]
+    public void Discover_WebConfig_ParsesConnectionStrings()
+    {
+        var dir = MakeTempDir();
+        var homedir = MakeTempDir();
+        try
+        {
+            WriteFile(dir, "web.config", """
+                <?xml version="1.0" encoding="utf-8"?>
+                <configuration>
+                  <connectionStrings>
+                    <add name="LegacyDb"
+                         connectionString="Server=.;Database=Legacy;Integrated Security=SSPI"
+                         providerName="System.Data.SqlClient" />
+                  </connectionStrings>
+                </configuration>
+                """);
+
+            var (config, source) = ConnectionConfig.Discover(dir, homedir);
+
+            Assert.That(config.Databases, Contains.Key("LegacyDb"));
+            Assert.That(source, Does.Contain("web.config"));
+        }
+        finally { DeleteDir(dir); DeleteDir(homedir); }
+    }
+
+    [Test]
+    public void Discover_AppConfig_ParsesConnectionStrings()
+    {
+        var dir = MakeTempDir();
+        var homedir = MakeTempDir();
+        try
+        {
+            WriteFile(dir, "App.config", """
+                <?xml version="1.0" encoding="utf-8"?>
+                <configuration>
+                  <connectionStrings>
+                    <add name="DesktopDb"
+                         connectionString="Server=.;Database=Desktop;Integrated Security=SSPI" />
+                  </connectionStrings>
+                </configuration>
+                """);
+
+            var (config, _) = ConnectionConfig.Discover(dir, homedir);
+
+            Assert.That(config.Databases, Contains.Key("DesktopDb"));
+        }
+        finally { DeleteDir(dir); DeleteDir(homedir); }
+    }
+
+    [Test]
+    public void Discover_FallsBackToEnvVar_WhenNoFilesFound()
+    {
+        var dir = MakeTempDir();
+        var homedir = MakeTempDir();
+        Environment.SetEnvironmentVariable(EnvVar,
+            """{"EnvDb": "Server=.;Database=Env;Integrated Security=SSPI"}""");
+        try
+        {
+            var (config, source) = ConnectionConfig.Discover(dir, homedir);
+
+            Assert.That(config.Databases, Contains.Key("EnvDb"));
+            Assert.That(source, Does.Contain(EnvVar));
+        }
+        finally
+        {
+            DeleteDir(dir);
+            DeleteDir(homedir);
+        }
+    }
+
+    [Test]
+    public void Discover_ThrowsInvalidOperationException_WhenNothingFound()
+    {
+        var dir = MakeTempDir();
+        var homedir = MakeTempDir();
+        // Garante que a env var não está definida
+        Environment.SetEnvironmentVariable(EnvVar, null);
+        try
+        {
+            Assert.Throws<InvalidOperationException>(() => ConnectionConfig.Discover(dir, homedir));
+        }
+        finally { DeleteDir(dir); DeleteDir(homedir); }
+    }
+
+    [Test]
+    public void Discover_AppSettingsMergesMultipleDatabases()
+    {
+        var dir = MakeTempDir();
+        var homedir = MakeTempDir();
+        try
+        {
+            WriteFile(dir, "appsettings.json", """
+                {
+                  "ConnectionStrings": {
+                    "Alpha": "Server=.;Database=A;Integrated Security=SSPI",
+                    "Beta":  "Server=.;Database=B;Integrated Security=SSPI"
+                  }
+                }
+                """);
+
+            var (config, _) = ConnectionConfig.Discover(dir, homedir);
+
+            Assert.That(config.Databases.Keys, Is.EquivalentTo(new[] { "Alpha", "Beta" }));
+        }
+        finally { DeleteDir(dir); DeleteDir(homedir); }
+    }
+
+    // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
 
@@ -302,5 +506,21 @@ public class ConnectionConfigTests
         var path = Path.Combine(Path.GetTempPath(), $"mcp_test_{Guid.NewGuid():N}.json");
         File.WriteAllText(path, content);
         return path;
+    }
+
+    private static string MakeTempDir()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"mcp_test_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        return dir;
+    }
+
+    private static void WriteFile(string dir, string name, string content)
+        => File.WriteAllText(Path.Combine(dir, name), content);
+
+    private static void DeleteDir(string dir)
+    {
+        if (Directory.Exists(dir))
+            Directory.Delete(dir, recursive: true);
     }
 }

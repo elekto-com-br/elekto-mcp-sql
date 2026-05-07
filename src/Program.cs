@@ -17,14 +17,26 @@ builder.Logging.AddConsole(options =>
 });
 
 // Loads and validates configuration before starting the host.
-// Priority: --connections <path> argument > MCP_SQL_CONNECTIONS environment variable.
+// Priority: --connections <path> > .elekto.mcp.conn.local.json (project) >
+//           .elekto.mcp.conn.local.json (~) > appsettings.json > web.config > MCP_SQL_CONNECTIONS
 ConnectionConfig config;
 try
 {
     var connectionsFile = ParseConnectionsArg(args);
-    config = connectionsFile is not null
-        ? ConnectionConfig.LoadFromFile(connectionsFile)
-        : ConnectionConfig.Load();
+    string source;
+
+    if (connectionsFile is not null)
+    {
+        config = ConnectionConfig.LoadFromFile(connectionsFile);
+        source = connectionsFile;
+    }
+    else
+    {
+        (config, source) = ConnectionConfig.Discover();
+    }
+
+    await Console.Error.WriteLineAsync(
+        $"[Elekto.Mcp.Sql] {config.Databases.Count} connection(s) loaded from {source}");
 }
 catch (Exception ex)
 {

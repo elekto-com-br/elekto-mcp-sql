@@ -66,8 +66,24 @@ with no warranties of any kind.
 
 ## Configuration
 
-Connections are defined in a JSON file and the path to that file is passed via the
-`--connections` argument. This avoids the need to embed and escape JSON inside `.mcp.json`.
+The server resolves connections by walking the following chain and using the first match:
+
+| Priority | Source |
+|----------|--------|
+| 1 | `--connections <path>` argument |
+| 2 | `.elekto.mcp.conn.local.json` no diretório de trabalho (raiz do projeto) |
+| 3 | `.elekto.mcp.conn.local.json` no diretório home do usuário (`~`) |
+| 4 | Seção `ConnectionStrings` em `appsettings.json` / `appsettings.Development.json` |
+| 5 | Elemento `<connectionStrings>` em `web.config` / `App.config` |
+| 6 | Variável de ambiente `MCP_SQL_CONNECTIONS` (compatibilidade legada) |
+
+At startup the server logs the source it chose to stderr, making it easy to diagnose
+which file is in effect.
+
+### Zero-config for existing .NET projects
+
+If your project already has `appsettings.json` or `web.config` with a `ConnectionStrings`
+section, the server will pick them up automatically — no extra file needed.
 
 ### Connection file format
 
@@ -95,6 +111,9 @@ The file is a JSON object mapping logical database names to their configurations
 
 Both formats can be mixed in the same file. See [`sample-connections.json`](sample-connections.json)
 for a ready-to-use example.
+
+The recommended location for the local file is the project root (auto-discovered) or `~`
+(shared across all projects). Both paths are already in `.gitignore`.
 
 ### Options per database
 
@@ -132,10 +151,27 @@ This is provided for backward compatibility; the file-based approach is recommen
 
 Create or edit `.mcp.json` at the solution root (or in your user profile for global use).
 
-### Recommended: connection file
+### Recommended: local connections file (zero-config)
 
-Store your connections in a file (e.g., `%USERPROFILE%\sql-connections.json`) and point
-the server to it via `--connections`. No JSON escaping required:
+Drop a `.elekto.mcp.conn.local.json` file in the project root or in `~` — the server
+finds it automatically. No arguments needed in `.mcp.json`:
+
+```json
+{
+  "servers": {
+    "sql": {
+      "type": "stdio",
+      "command": "dotnet",
+      "args": ["D:\\Tools\\Elekto.Mcp.Sql\\Elekto.Mcp.Sql.dll"]
+    }
+  }
+}
+```
+
+### Alternative: explicit path via --connections
+
+Point the server to any file via `--connections`. Useful when the file lives outside the
+project tree or when you need to switch between profiles:
 
 ```json
 {
