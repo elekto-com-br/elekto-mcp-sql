@@ -22,23 +22,20 @@ public sealed class DatabaseEntry
 /// Loads and validates connection configuration. Supports multiple sources via <see cref="Discover"/>.
 /// Supports environment variable expansion using <c>%{VARIABLE_NAME}</c> syntax inside connection strings.
 /// </summary>
-public sealed class ConnectionConfig
+public sealed partial class ConnectionConfig
 {
     /// <summary>Name of the environment variable used as fallback configuration source.</summary>
     public const string EnvVarName = "MCP_SQL_CONNECTIONS";
 
     /// <summary>Name of the local connections file searched in the working and home directories.</summary>
-    public const string LocalFileName = ".elekto.mcp.conn.local.json";
+    public const string LocalFileName = ".elekto.mcp.sql.local.json";
 
     // Pattern to capture %{NAME} placeholders
-    private static readonly Regex VarExpansionPattern = new(@"%\{([^}]+)\}", RegexOptions.Compiled);
+    private static readonly Regex VarExpansionPattern = EnvironmentVariableRegex();
 
     public IReadOnlyDictionary<string, DatabaseEntry> Databases { get; }
 
-    private ConnectionConfig(IReadOnlyDictionary<string, DatabaseEntry> databases)
-    {
-        Databases = databases;
-    }
+    private ConnectionConfig(IReadOnlyDictionary<string, DatabaseEntry> databases) => Databases = databases;
 
     // -------------------------------------------------------------------------
     // Auto-discovery (merge)
@@ -82,7 +79,7 @@ public sealed class ConnectionConfig
         // 1. MCP_SQL_CONNECTIONS env var
         Absorb(TryLoadDictFromEnvVar(), $"env:{EnvVarName}");
 
-        // 2. ~/.elekto.mcp.conn.local.json  (global user defaults)
+        // 2. ~/.elekto.mcp.sql.local.json  (global user defaults)
         Absorb(TryLoadDictFromLocalFile(Path.Combine(homeDirectory, LocalFileName)),
                $"{LocalFileName} (~)");
 
@@ -94,7 +91,7 @@ public sealed class ConnectionConfig
         foreach (var jsonFile in new[] { "appsettings.json", "appsettings.Development.json" })
             Absorb(TryLoadDictFromAppSettings(Path.Combine(workingDirectory, jsonFile)), jsonFile);
 
-        // 5. ./.elekto.mcp.conn.local.json  (project-level — highest priority)
+        // 5. ./.elekto.mcp.sql.local.json  (project-level — highest priority)
         Absorb(TryLoadDictFromLocalFile(Path.Combine(workingDirectory, LocalFileName)),
                $"{LocalFileName} (project)");
 
@@ -287,14 +284,22 @@ public sealed class ConnectionConfig
         return result;
     }
 
-    private static string ExpandVariables(string input, string dbName)
-    {
-        return VarExpansionPattern.Replace(input, match =>
-        {
-            var varName = match.Groups[1].Value;
-            return Environment.GetEnvironmentVariable(varName)
-                ?? throw new ArgumentException(
-                    $"Database '{dbName}': environment variable '%{{{varName}}}' not found.");
-        });
-    }
+    private static string ExpandVariables(string input, string dbName) 
+        => VarExpansionPattern.Replace(input, 
+            match =>
+            {
+                var varName = match.Groups[1].Value;
+                return Environment.GetEnvironmentVariable(varName)
+                    ?? throw new ArgumentException(
+                        $"Database '{dbName}': environment variable '%{{{varName}}}' not found.");
+            });
+
+    /// <summary>
+    /// Regex pattern for environment variable expansion: %{VARNAME}
+    /// Enforces POSIX-compliant variable names: [A-Za-z_][A-Za-z0-9_]*
+    /// Valid: DB_USER, _PRIVATE, db_user, DB123
+    /// Invalid: 123DB (leading digit), DB-PASS (hyphen), DB PASS (space)
+    /// </summary>
+    [GeneratedRegex(@"%\{([A-Za-z_][A-Za-z0-9_]*)\}", RegexOptions.Compiled)]
+    private static partial Regex EnvironmentVariableRegex();
 }

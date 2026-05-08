@@ -373,13 +373,10 @@ public class SchemaReaderTests
     }
 
     [Test]
-    public void QueryTable_InvalidTableIdentifier_ThrowsArgumentException()
-    {
-        Assert.Throws<ArgumentException>(() => _reader.QueryTable(
-            "dbo.Instrumento", schema: null,  // dot in name = invalid
-            columns: null, where: null, orderBy: null,
-            top: 10, skip: 0, maxRows: 10_000));
-    }
+    public void QueryTable_InvalidTableIdentifier_ThrowsArgumentException() => Assert.Throws<ArgumentException>(() => _reader.QueryTable(
+                                                                                        "dbo.Instrumento", schema: null,  // dot in name = invalid
+                                                                                        columns: null, where: null, orderBy: null,
+                                                                                        top: 10, skip: 0, maxRows: 10_000));
 
     [Test]
     public void QueryTable_SchemaFinanceiro_ReturnsRows()
@@ -432,21 +429,18 @@ public class SchemaReaderTests
     }
 
     [Test]
-    public void QueryTable_InvalidAggregate_ThrowsArgumentException()
-    {
-        Assert.Throws<ArgumentException>(() => _reader.QueryTable(
-            table: "Instrumento",
-            schema: "dbo",
-            columns: null,
-            where: null,
-            orderBy: null,
-            top: 10,
-            skip: 0,
-            maxRows: 10_000,
-            groupBy: "Codigo",
-            aggregates: "MEDIAN(PrecoCusto)",
-            samplePercent: null));
-    }
+    public void QueryTable_InvalidAggregate_ThrowsArgumentException() => Assert.Throws<ArgumentException>(() => _reader.QueryTable(
+                                                                                  table: "Instrumento",
+                                                                                  schema: "dbo",
+                                                                                  columns: null,
+                                                                                  where: null,
+                                                                                  orderBy: null,
+                                                                                  top: 10,
+                                                                                  skip: 0,
+                                                                                  maxRows: 10_000,
+                                                                                  groupBy: "Codigo",
+                                                                                  aggregates: "MEDIAN(PrecoCusto)",
+                                                                                  samplePercent: null));
 
     [Test]
     public void QueryTable_SqlError_IsWrappedWithObjectName()

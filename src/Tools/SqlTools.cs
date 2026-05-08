@@ -18,10 +18,7 @@ public sealed class SqlTools
 {
     private readonly ConnectionConfig _config;
 
-    public SqlTools(ConnectionConfig config)
-    {
-        _config = config;
-    }
+    public SqlTools(ConnectionConfig config) => _config = config;
 
     private SchemaReader GetReader(string database)
     {

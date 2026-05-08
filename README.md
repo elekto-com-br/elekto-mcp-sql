@@ -2,7 +2,7 @@
 
 Read-only MCP server for SQL Server 2022+ introspection and querying.
 Exposes schema metadata, object definitions, and data queries via the MCP protocol (stdio),
-allowing GitHub Copilot (and other MCP clients) to understand your database structure
+allowing GitHub Copilot (and other MCP clients, like Claude, etc.) to understand your database structure
 without storing credentials in the repository.
 
 ## ⚠️ Privacy and Data Security Warning
@@ -35,6 +35,9 @@ Before connecting this server to any database, carefully consider:
   specific schemas where possible).
 - Use `max_query_rows` to limit how much data can be returned in a single call.
 - Prefer databases with anonymized or synthetic data for development and exploration.
+- AI agents can be **extremely creative** in finding ways to execute a task. Altouht this server 
+  is designed to be read-only and to validate all inputs, **there is always a risk of 
+  unintended consequences** when exposing database access to an AI agent.
 
 **Regardless of the precautions you take, the responsibility for any consequences arising
 from the use of this tool rests entirely with you.** This software is provided *as is*
@@ -42,40 +45,40 @@ with no warranties of any kind.
 
 ## Available Tools
 
-| Tool | Description |
-|------|-------------|
-| `list_databases` | Databases registered in the configuration |
-| `get_database_overview` | High-level database summary (counts, size, connection metadata) |
-| `get_schema_summary` | Aggregated metrics by schema (objects, rows, size) |
-| `list_schemas` | Schemas in a database (excluding system schemas) |
-| `list_tables` | User tables with schema, dates, approximate rows and estimated size |
-| `list_views` | User views |
-| `list_procedures` | User stored procedures (with basic complexity metrics) |
-| `list_functions` | User-defined functions (with basic complexity metrics) |
-| `get_table_schema` | Columns, PKs, FKs, checks, uniques, indexes and computed/collation metadata |
-| `get_view_definition` | DDL definition + columns of a view |
-| `get_procedure_definition` | CREATE PROCEDURE text |
-| `get_function_definition` | CREATE FUNCTION text |
-| `get_dependency_graph` | Object dependency edges (FK + SQL dependencies) |
-| `get_table_usage` | References to a table across FKs and SQL modules |
-| `get_data_profile` | Column profile (null ratio, distinct count, min/max, top values) |
-| `get_index_health` | Duplicate/unused index diagnostics + missing-index suggestions |
-| `compare_schemas` | Compares table/column structure between two configured databases |
-| `generate_dependency_dot` | Graphviz DOT dependency graph with node metadata (`node_kind`) |
-| `query_table` | SELECT from a table or view with filtering, grouping, secure aggregates, sorting, sampling and pagination |
+| Tool                       | Description                                                  |
+| -------------------------- | ------------------------------------------------------------ |
+| `list_databases`           | Databases registered in the configuration                    |
+| `get_database_overview`    | High-level database summary (counts, size, connection metadata) |
+| `get_schema_summary`       | Aggregated metrics by schema (objects, rows, size)           |
+| `list_schemas`             | Schemas in a database (excluding system schemas)             |
+| `list_tables`              | User tables with schema, dates, approximate rows and estimated size |
+| `list_views`               | User views                                                   |
+| `list_procedures`          | User stored procedures (with basic complexity metrics)       |
+| `list_functions`           | User-defined functions (with basic complexity metrics)       |
+| `get_table_schema`         | Columns, PKs, FKs, checks, uniques, indexes and computed/collation metadata |
+| `get_view_definition`      | DDL definition + columns of a view                           |
+| `get_procedure_definition` | CREATE PROCEDURE text                                        |
+| `get_function_definition`  | CREATE FUNCTION text                                         |
+| `get_dependency_graph`     | Object dependency edges (FK + SQL dependencies)              |
+| `get_table_usage`          | References to a table across FKs and SQL modules             |
+| `get_data_profile`         | Column profile (null ratio, distinct count, min/max, top values) |
+| `get_index_health`         | Duplicate/unused index diagnostics + missing-index suggestions |
+| `compare_schemas`          | Compares table/column structure between two configured databases |
+| `generate_dependency_dot`  | Graphviz DOT dependency graph with node metadata (`node_kind`) |
+| `query_table`              | SELECT from a table or view with filtering, grouping, secure aggregates, sorting, sampling and pagination |
 
 ## Configuration
 
 The server resolves connections by walking the following chain and using the first match:
 
-| Priority | Source |
-|----------|--------|
-| 1 | `--connections <path>` argument |
-| 2 | `.elekto.mcp.conn.local.json` no diretório de trabalho (raiz do projeto) |
-| 3 | `.elekto.mcp.conn.local.json` no diretório home do usuário (`~`) |
-| 4 | Seção `ConnectionStrings` em `appsettings.json` / `appsettings.Development.json` |
-| 5 | Elemento `<connectionStrings>` em `web.config` / `App.config` |
-| 6 | Variável de ambiente `MCP_SQL_CONNECTIONS` (compatibilidade legada) |
+| Priority | Source                                                       |
+| -------- | ------------------------------------------------------------ |
+| 1        | `--connections <path>` argument                              |
+| 2        | `.elekto.mcp.sql.local.json` no diretório de trabalho (raiz do projeto) |
+| 3        | `.elekto.mcp.sql.local.json` no diretório home do usuário (`~`) |
+| 4        | Seção `ConnectionStrings` em `appsettings.json` / `appsettings.Development.json` |
+| 5        | Elemento `<connectionStrings>` em `web.config` / `App.config` |
+| 6        | Variável de ambiente `MCP_SQL_CONNECTIONS` (compatibilidade legada) |
 
 At startup the server logs the source it chose to stderr, making it easy to diagnose
 which file is in effect.
@@ -84,6 +87,10 @@ which file is in effect.
 
 If your project already has `appsettings.json` or `web.config` with a `ConnectionStrings`
 section, the server will pick them up automatically — no extra file needed.
+
+**Be Careful**: the automatic discovery is convenient but may use a project connection too powerful for safe use with AI agents. 
+If your existing connection strings have write permissions or access to sensitive data, consider using a separate connections file 
+with read-only credentials and specifying it explicitly via `--connections` or by placing it in the project root.
 
 ### Connection file format
 
@@ -117,11 +124,11 @@ The recommended location for the local file is the project root (auto-discovered
 
 ### Options per database
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `connection_string` | string | required | SQL Server connection string |
-| `max_query_rows` | integer | 10 000 | Maximum rows returned per query call |
-| `default_timeout_seconds` | integer | 30 | SQL command timeout in seconds |
+| Option                    | Type    | Default  | Description                          |
+| ------------------------- | ------- | -------- | ------------------------------------ |
+| `connection_string`       | string  | required | SQL Server connection string         |
+| `max_query_rows`          | integer | 10 000   | Maximum rows returned per query call |
+| `default_timeout_seconds` | integer | 30       | SQL command timeout in seconds       |
 
 ### Environment variable expansion in connection strings
 
@@ -153,7 +160,7 @@ Create or edit `.mcp.json` at the solution root (or in your user profile for glo
 
 ### Recommended: local connections file (zero-config)
 
-Drop a `.elekto.mcp.conn.local.json` file in the project root or in `~` — the server
+Drop a `.elekto.mcp.conn.local.json` file in the project root or in `~`; the server
 finds it automatically. No arguments needed in `.mcp.json`:
 
 ```json

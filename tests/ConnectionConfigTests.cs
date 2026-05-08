@@ -155,11 +155,9 @@ public class ConnectionConfigTests
     // -------------------------------------------------------------------------
 
     [Test]
-    public void Load_EnvVarNotSet_ThrowsInvalidOperationException()
-    {
+    public void Load_EnvVarNotSet_ThrowsInvalidOperationException() =>
         // EnvVar já foi limpa no TearDown do teste anterior (ou nunca foi setada)
         Assert.Throws<InvalidOperationException>(() => ConnectionConfig.Load());
-    }
 
     [Test]
     public void Load_InvalidJson_ThrowsInvalidOperationException()
@@ -261,11 +259,8 @@ public class ConnectionConfigTests
     }
 
     [Test]
-    public void LoadFromFile_FileMissing_ThrowsInvalidOperationException()
-    {
-        Assert.Throws<InvalidOperationException>(() =>
-            ConnectionConfig.LoadFromFile("nonexistent_connections_file_xyz.json"));
-    }
+    public void LoadFromFile_FileMissing_ThrowsInvalidOperationException() => Assert.Throws<InvalidOperationException>(() =>
+                                                                                       ConnectionConfig.LoadFromFile("nonexistent_connections_file_xyz.json"));
 
     [Test]
     public void LoadFromFile_InvalidJson_ThrowsInvalidOperationException()
