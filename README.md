@@ -67,6 +67,59 @@ with no warranties of any kind.
 | `generate_dependency_dot`  | Graphviz DOT dependency graph with node metadata (`node_kind`) |
 | `query_table`              | SELECT from a table or view with filtering, grouping, secure aggregates, sorting, sampling and pagination |
 
+## Installation
+
+### As a .NET global tool (recommended)
+
+Requires [.NET 10 Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) or SDK.
+
+```powershell
+dotnet tool install -g Elekto.Mcp.Sql
+```
+
+Upgrade to a newer version:
+
+```powershell
+dotnet tool update -g Elekto.Mcp.Sql
+```
+
+After installation the `elekto-mcp-sql` command is available on PATH.
+Use it directly in `.mcp.json` — no path needed:
+
+```json
+{
+  "servers": {
+    "sql": {
+      "type": "stdio",
+      "command": "elekto-mcp-sql"
+    }
+  }
+}
+```
+
+> **Zero-config:** if your project already has a `ConnectionStrings` section in
+> `appsettings.json`, `web.config` or `App.config`, the server picks it up automatically
+> and no further configuration is required.
+
+### From a local publish (air-gapped / corporate environments)
+
+```powershell
+cd src
+dotnet publish -c Release -o C:\Tools\Elekto.Mcp.Sql
+```
+
+```json
+{
+  "servers": {
+    "sql": {
+      "type": "stdio",
+      "command": "dotnet",
+      "args": ["C:\\Tools\\Elekto.Mcp.Sql\\Elekto.Mcp.Sql.dll"]
+    }
+  }
+}
+```
+
 ## Configuration
 
 The server resolves connections by walking the following chain and using the first match:

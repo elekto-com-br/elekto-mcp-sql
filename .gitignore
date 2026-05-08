@@ -2,6 +2,7 @@
 bin/
 obj/
 publish/
+nupkg/
 
 # Visual Studio
 .vs/

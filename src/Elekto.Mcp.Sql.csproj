@@ -8,10 +8,44 @@
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
     <AssemblyName>Elekto.Mcp.Sql</AssemblyName>
     <RootNamespace>Elekto.Mcp.Sql</RootNamespace>
-    <Description>MCP Server para introspecção de bancos SQL Server (somente leitura)</Description>
-    <Version>1.0.0</Version>
     <SelfContained>false</SelfContained>
+
+    <!-- NuGet global tool -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>elekto-mcp-sql</ToolCommandName>
+
+    <!-- Package identity -->
+    <PackageId>Elekto.Mcp.Sql</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>Elekto Produtos Financeiros</Authors>
+    <Copyright>Copyright © 2026 Elekto Produtos Financeiros</Copyright>
+
+    <!-- Package description and discoverability -->
+    <Description>
+      Read-only MCP server for SQL Server 2022+ introspection and querying.
+      Exposes schema metadata, DDL definitions, dependency graphs, index health diagnostics,
+      data profiling and data queries via the Model Context Protocol (stdio transport),
+      enabling AI assistants such as GitHub Copilot and Claude to understand your database
+      structure without storing credentials in the repository.
+      Zero-config for .NET projects: automatically reads ConnectionStrings from
+      appsettings.json, web.config and App.config.
+    </Description>
+    <PackageTags>mcp;sql-server;database;introspection;schema;copilot;claude;ai;readonly;modelcontextprotocol;devtools</PackageTags>
+
+    <!-- Source and license -->
+    <PackageProjectUrl>https://github.com/elekto-com-br/elekto-mcp-sql</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/elekto-com-br/elekto-mcp-sql</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>GPL-3.0-or-later</PackageLicenseExpression>
+
+    <!-- README shown on nuget.org -->
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Include the repository README in the NuGet package -->
+    <None Include="..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.0" />
