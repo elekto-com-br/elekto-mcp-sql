@@ -38,7 +38,7 @@ jobs:
       - name: Pack
         run: >
           dotnet pack src/Elekto.Mcp.Sql.csproj
-          --no-build -c Release
+          -c Release
           -p:Version=${{ env.VERSION }}
           --output ./dist
 
