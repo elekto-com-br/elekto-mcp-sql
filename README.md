@@ -213,7 +213,7 @@ Create or edit `.mcp.json` at the solution root (or in your user profile for glo
 
 ### Recommended: local connections file (zero-config)
 
-Drop a `.elekto.mcp.conn.local.json` file in the project root or in `~`; the server
+Drop a `.elekto.mcp.sql.local.json` file in the project root or in `~`; the server
 finds it automatically. No arguments needed in `.mcp.json`:
 
 ```json
