@@ -38,13 +38,14 @@
     <RepositoryType>git</RepositoryType>
     <PackageLicenseExpression>GPL-3.0-or-later</PackageLicenseExpression>
 
-    <!-- README shown on nuget.org -->
+    <!-- README and icon shown on nuget.org -->
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>elekto_logo_sq.300x300.png</PackageIcon>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Include the repository README in the NuGet package -->
     <None Include="..\README.md" Pack="true" PackagePath="\" />
+    <None Include="..\assets\elekto_logo_sq.300x300.png" Pack="true" PackagePath="\" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,5 +1,11 @@
 # Elekto.Mcp.Sql
 
+[![.NET](https://img.shields.io/badge/.NET-10-512BD4)](https://dotnet.microsoft.com)
+[![NuGet](https://img.shields.io/nuget/v/Elekto.Mcp.Sql.svg)](https://www.nuget.org/packages/Elekto.Mcp.Sql)
+[![NuGet Downloads](https://img.shields.io/nuget/dt/Elekto.Mcp.Sql.svg)](https://www.nuget.org/packages/Elekto.Mcp.Sql)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![CI](https://github.com/elekto-com-br/elekto-mcp-sql/actions/workflows/ci.yml/badge.svg)](https://github.com/elekto-com-br/elekto-mcp-sql/actions/workflows/ci.yml)
+
 Read-only MCP server for SQL Server 2022+ introspection and querying.
 Exposes schema metadata, object definitions, and data queries via the MCP protocol (stdio),
 allowing GitHub Copilot (and other MCP clients, like Claude, etc.) to understand your database structure
