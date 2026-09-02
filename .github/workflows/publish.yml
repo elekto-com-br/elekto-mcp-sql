@@ -18,6 +18,28 @@ jobs:
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
         shell: bash
 
+      # The pack step below passes -p:Version=$VERSION, which overrides whatever the csproj
+      # holds — so a tag that disagrees with the csproj publishes the tag's version in silence.
+      # That is exactly how the csproj sat at 1.0.3 while v1.0.4, v1.0.5 and v1.0.6 shipped.
+      # Failing here, before anything is built, makes the drift impossible instead of invisible.
+      - name: Verify the csproj version matches the tag
+        shell: bash
+        run: |
+          CSPROJ=src/Elekto.Mcp.Sql.csproj
+          CSPROJ_VERSION=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' "$CSPROJ" | head -1)
+
+          if [ -z "$CSPROJ_VERSION" ]; then
+            echo "::error file=$CSPROJ::No <Version> element found."
+            exit 1
+          fi
+
+          if [ "$CSPROJ_VERSION" != "$VERSION" ]; then
+            echo "::error file=$CSPROJ::Tag ${GITHUB_REF_NAME} means version '${VERSION}', but the csproj declares '${CSPROJ_VERSION}'. Set them to the same value and re-tag."
+            exit 1
+          fi
+
+          echo "Tag and csproj agree on ${VERSION}."
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
