@@ -50,7 +50,11 @@ public sealed class SchemaReader
     }
 
     /// <summary>Executes a query and serializes the result as a JSON array of objects.</summary>
-    private static string QueryToJson(SqlCommand cmd)
+    private static string QueryToJson(SqlCommand cmd) =>
+        JsonSerializer.Serialize(QueryToRows(cmd), new JsonSerializerOptions { WriteIndented = false });
+
+    /// <summary>Executes a query and materialises the rows.</summary>
+    private static List<Dictionary<string, object?>> QueryToRows(SqlCommand cmd)
     {
         using var reader = cmd.ExecuteReader();
         var rows = new List<Dictionary<string, object?>>();
@@ -61,7 +65,7 @@ public sealed class SchemaReader
                 row[reader.GetName(i)] = reader.IsDBNull(i) ? null : reader.GetValue(i);
             rows.Add(row);
         }
-        return JsonSerializer.Serialize(rows, new JsonSerializerOptions { WriteIndented = false });
+        return rows;
     }
 
     #region Listings
@@ -156,7 +160,91 @@ public sealed class SchemaReader
         return QueryToJson(cmd);
     }
 
-    public string ListTables(string? schema)
+    /// <summary>
+    /// Turns a caller-supplied name filter into a LIKE pattern. A pattern with no <c>%</c> is taken
+    /// as "contains", because that is what someone typing a bare name means; a pattern that already
+    /// carries wildcards is passed through as written.
+    /// </summary>
+    private static object ToLikePattern(string? pattern)
+    {
+        if (string.IsNullOrWhiteSpace(pattern)) return DBNull.Value;
+
+        var trimmed = pattern.Trim();
+        return trimmed.Contains('%') ? trimmed : $"%{trimmed}%";
+    }
+
+    /// <summary>
+    /// Every column across the database whose name matches a pattern, in tables and — unless asked
+    /// otherwise — views. Answers "where does this column live?", which is the first question of any
+    /// rename, widening or impact review, and which no other tool here could answer.
+    /// </summary>
+    public string FindColumns(string columnPattern, string? schema, bool includeViews)
+    {
+        if (string.IsNullOrWhiteSpace(columnPattern))
+            throw new ToolInputException(
+                "'column_pattern' is required and cannot be empty.",
+                "Give part of a column name. A pattern without % matches anywhere in the name; "
+                + "add % yourself for a prefix or suffix match.",
+                new { column_pattern = "ReferenceDate" });
+
+        if (!string.IsNullOrWhiteSpace(schema)) ValidateIdentifier(schema, "schema");
+
+        using var conn = OpenConnection();
+        using var cmd = CreateCommand(conn, """
+            SELECT s.name  AS schema_name,
+                   o.name  AS object_name,
+                   CASE o.type WHEN 'U' THEN 'TABLE' ELSE 'VIEW' END AS object_type,
+                   c.name  AS column_name,
+                   c.column_id,
+                   tp.name AS data_type,
+                   c.max_length,
+                   c.precision,
+                   c.scale,
+                   c.is_nullable
+            FROM sys.columns c
+            JOIN sys.objects o  ON c.object_id = o.object_id
+            JOIN sys.schemas s  ON o.schema_id = s.schema_id
+            JOIN sys.types   tp ON tp.user_type_id = c.user_type_id
+            WHERE c.name LIKE @pattern
+              AND (o.type = 'U' OR (@includeViews = 1 AND o.type = 'V'))
+              AND (@schema IS NULL OR s.name = @schema)
+            ORDER BY s.name, o.name, c.column_id;
+            """);
+        cmd.Parameters.AddWithValue("@pattern", ToLikePattern(columnPattern));
+        cmd.Parameters.AddWithValue("@includeViews", includeViews ? 1 : 0);
+        cmd.Parameters.AddWithValue("@schema", (object?)schema ?? DBNull.Value);
+
+        var matches = new List<Dictionary<string, object?>>();
+        using (var reader = cmd.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                var dataType = reader.GetString(5);
+                matches.Add(new Dictionary<string, object?>
+                {
+                    ["schema_name"] = reader.GetString(0),
+                    ["object_name"] = reader.GetString(1),
+                    ["object_type"] = reader.GetString(2),
+                    ["column_name"] = reader.GetString(3),
+                    ["column_id"] = reader.GetInt32(4),
+                    ["data_type"] = dataType,
+                    ["type_declaration"] = SqlTypeFormatter.Format(
+                        dataType, reader.GetInt16(6), reader.GetByte(7), reader.GetByte(8)),
+                    ["is_nullable"] = reader.GetBoolean(9)
+                });
+            }
+        }
+
+        return JsonSerializer.Serialize(new
+        {
+            column_pattern = columnPattern,
+            include_views = includeViews,
+            match_count = matches.Count,
+            matches
+        });
+    }
+
+    public string ListTables(string? schema, string? namePattern = null)
     {
         using var conn = OpenConnection();
         using var cmd = CreateCommand(conn, """
@@ -173,14 +261,16 @@ public sealed class SchemaReader
             LEFT JOIN sys.partitions p ON p.object_id = t.object_id
             LEFT JOIN sys.allocation_units au ON au.container_id = p.partition_id
             WHERE (@schema IS NULL OR s.name = @schema)
+              AND (@namePattern IS NULL OR t.name LIKE @namePattern)
             GROUP BY s.name, t.name, t.create_date, t.modify_date
             ORDER BY s.name, t.name;
             """);
         cmd.Parameters.AddWithValue("@schema", (object?)schema ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@namePattern", ToLikePattern(namePattern));
         return QueryToJson(cmd);
     }
 
-    public string ListViews(string? schema)
+    public string ListViews(string? schema, string? namePattern = null)
     {
         using var conn = OpenConnection();
         using var cmd = CreateCommand(conn, """
@@ -191,9 +281,11 @@ public sealed class SchemaReader
             FROM sys.views v
             JOIN sys.schemas s ON v.schema_id = s.schema_id
             WHERE (@schema IS NULL OR s.name = @schema)
+              AND (@namePattern IS NULL OR v.name LIKE @namePattern)
             ORDER BY s.name, v.name;
             """);
         cmd.Parameters.AddWithValue("@schema", (object?)schema ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@namePattern", ToLikePattern(namePattern));
         return QueryToJson(cmd);
     }
 
@@ -706,7 +798,7 @@ public sealed class SchemaReader
         if (topValues <= 0)
             throw new ArgumentException("'top_values' must be greater than zero.", nameof(topValues));
 
-        var selectedColumns = ParseIdentifierList(columns);
+        var selectedColumns = ParseIdentifierList(columns, "columns");
 
         using var conn = OpenConnection();
 
@@ -1092,12 +1184,23 @@ public sealed class SchemaReader
         decimal? samplePercent = null)
     {
         if (top <= 0)
-            throw new ArgumentException("'top' must be greater than zero.", nameof(top));
+            throw new ToolInputException(
+                $"'top' must be greater than zero; {top} was given.",
+                "Omit it to take the default of 100.",
+                new { top = 100 });
 
         if (skip < 0)
-            throw new ArgumentException("'skip' cannot be negative.", nameof(skip));
+            throw new ToolInputException(
+                $"'skip' cannot be negative; {skip} was given.",
+                "Omit it to start from the first row.",
+                new { skip = 0 });
 
+        var topRequested = top;
         top = Math.Min(top, maxRows);
+
+        // One row past the limit, purely to learn whether there are more. It is dropped before the
+        // rows are returned; its only job is to make `truncated` truthful rather than a guess.
+        var probeLimit = top + 1;
 
         ValidateIdentifier(table, nameof(table));
         var effectiveSchema = string.IsNullOrWhiteSpace(schema) ? null : schema;
@@ -1110,7 +1213,7 @@ public sealed class SchemaReader
             ? $"[{effectiveSchema}].[{table}]"
             : $"[{table}]";
 
-        var groupColumns = ParseIdentifierList(groupBy).Select(c => $"[{c}]").ToList();
+        var groupColumns = ParseIdentifierList(groupBy, "group_by").Select(c => $"[{c}]").ToList();
         var aggregateExpressions = ParseAggregateExpressions(aggregates);
 
         string selectList;
@@ -1133,7 +1236,7 @@ public sealed class SchemaReader
             }
             else
             {
-                var cols = ParseIdentifierList(columns);
+                var cols = ParseIdentifierList(columns, "columns");
                 selectList = string.Join(", ", cols.Select(c => $"[{c}]"));
             }
         }
@@ -1147,7 +1250,7 @@ public sealed class SchemaReader
         if (skip > 0)
             sb.Append($"SELECT {selectList} FROM {quotedTable}");
         else
-            sb.Append($"SELECT TOP ({top}) {selectList} FROM {quotedTable}");
+            sb.Append($"SELECT TOP ({probeLimit}) {selectList} FROM {quotedTable}");
 
         var whereParts = new List<string>();
         if (!string.IsNullOrWhiteSpace(where))
@@ -1166,45 +1269,101 @@ public sealed class SchemaReader
             sb.Append($" ORDER BY {effectiveOrderBy}");
 
         if (skip > 0)
-            sb.Append($" OFFSET {skip} ROWS FETCH NEXT {top} ROWS ONLY");
+            sb.Append($" OFFSET {skip} ROWS FETCH NEXT {probeLimit} ROWS ONLY");
 
         using var conn = OpenConnection();
         using var cmd = CreateCommand(conn, sb.ToString());
 
+        List<Dictionary<string, object?>> rows;
         try
         {
-            return QueryToJson(cmd);
+            rows = QueryToRows(cmd);
         }
         catch (SqlException ex)
         {
-            throw new InvalidOperationException(
-                $"Query execution failed for [{effectiveSchema ?? "dbo"}].[{table}]. SQL Server message: {ex.Message}",
-                ex);
+            // Naming the object matters: by this point the caller has supplied a table, a column
+            // list, a WHERE and an ORDER BY, and the bare server message rarely says which was wrong.
+            throw new ToolInputException(
+                $"SQL Server rejected the query on [{effectiveSchema ?? "dbo"}].[{table}]: {ex.Message}",
+                "The 'where' and 'order_by' clauses are passed to SQL Server as written, so a typo in "
+                + "either surfaces here. Confirm the column names with get_table_schema.",
+                null);
         }
+
+        var truncated = rows.Count > top;
+        if (truncated) rows.RemoveRange(top, rows.Count - top);
+
+        var envelope = new Dictionary<string, object?>
+        {
+            ["table"] = new { schema = effectiveSchema ?? "dbo", name = table },
+            ["row_count"] = rows.Count,
+            // Whether rows were left behind. Without this a caller cannot tell a table of 2 rows
+            // from the first 2 rows of a table of five million, and will state the first with
+            // confidence.
+            ["truncated"] = truncated,
+            ["top_applied"] = top,
+            ["skip"] = skip,
+            ["max_query_rows"] = maxRows,
+            ["rows"] = rows
+        };
+
+        // Only worth saying when the per-database ceiling actually overrode what was asked for.
+        if (topRequested != top) envelope["top_requested"] = topRequested;
+
+        return JsonSerializer.Serialize(envelope);
     }
 
-    private static List<string> ParseIdentifierList(string? list)
+    private static List<string> ParseIdentifierList(string? list, string parameterName = "identifier")
     {
         if (string.IsNullOrWhiteSpace(list))
             return new List<string>();
+
+        RejectJsonShapedValue(list, parameterName, "Source, Name, ReferenceDate");
 
         var identifiers = list
             .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
             .ToList();
 
         if (identifiers.Count == 0)
-            throw new ArgumentException("Identifier list cannot be empty.");
+            throw new ToolInputException(
+                $"'{parameterName}' contained only separators, so no column name could be read from it.",
+                "Give one or more names separated by commas, or omit the parameter entirely.",
+                new { columns = "Source, Name" });
 
         foreach (var identifier in identifiers)
-            ValidateIdentifier(identifier, "identifier");
+            ValidateIdentifier(identifier, parameterName);
 
         return identifiers;
+    }
+
+    /// <summary>
+    /// Catches the single most likely way to call these parameters wrong, and says so plainly.
+    /// </summary>
+    /// <remarks>
+    /// Several parameters here take a comma-separated string. A caller that has not been told the
+    /// type — and some MCP clients cannot represent an optional string, so they show the caller
+    /// nothing at all — reaches for a JSON array, which is the obvious guess. Without this, that
+    /// guess fails as "invalid identifier" and the caller has no way to work out why.
+    /// </remarks>
+    private static void RejectJsonShapedValue(string value, string parameterName, string example)
+    {
+        var trimmed = value.TrimStart();
+        if (trimmed.Length == 0 || (trimmed[0] != '[' && trimmed[0] != '{'))
+            return;
+
+        var shown = value.Length > 80 ? value[..80] + "…" : value;
+        throw new ToolInputException(
+            $"'{parameterName}' looks like JSON: {shown}",
+            $"'{parameterName}' is a plain comma-separated string, not a JSON array or object.",
+            new Dictionary<string, string> { [parameterName] = example });
     }
 
     private static List<string> ParseAggregateExpressions(string? aggregates)
     {
         if (string.IsNullOrWhiteSpace(aggregates))
             return new List<string>();
+
+        RejectJsonShapedValue(aggregates, "aggregates", "COUNT(*) AS Total, MAX(ReferenceDate) AS Ultima");
 
         var expressions = aggregates
             .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
@@ -1215,8 +1374,12 @@ public sealed class SchemaReader
         {
             var match = AggregatePattern.Match(expression.Trim());
             if (!match.Success)
-                throw new ArgumentException(
-                    $"Invalid aggregate expression '{expression}'. Use FUNC(column) [AS alias] with FUNC in COUNT,SUM,AVG,MIN,MAX.");
+                throw new ToolInputException(
+                    $"'{expression}' is not a valid aggregate expression.",
+                    "Write FUNC(column), optionally followed by AS alias, with FUNC one of "
+                    + "COUNT, SUM, AVG, MIN or MAX. Only a bare column name is accepted inside the "
+                    + "parentheses — an expression such as LEN(Name) or a CAST is not supported here.",
+                    new { aggregates = "COUNT(*) AS Total, AVG(Close) AS Media" });
 
             var func = match.Groups["func"].Value.ToUpperInvariant();
             var col = match.Groups["col"].Value;
@@ -1266,10 +1429,16 @@ public sealed class SchemaReader
 
     private static void ValidateIdentifier(string value, string paramName)
     {
-        if (!IdentifierPattern.IsMatch(value))
-            throw new ArgumentException(
-                $"Invalid value for '{paramName}': '{value}'. " +
-                "Use only letters, digits and underscores.");
+        if (IdentifierPattern.IsMatch(value)) return;
+
+        RejectJsonShapedValue(value, paramName, "Source, Name");
+
+        throw new ToolInputException(
+            $"'{value}' is not a valid identifier for '{paramName}'.",
+            "An identifier starts with a letter or underscore and continues with letters, digits or "
+            + "_ $ #. Pass the bare name with no brackets, quotes or schema prefix — the schema goes "
+            + "in its own parameter.",
+            new { schema = "Feeder", table = "GenericSecurity" });
     }
 
     /// <summary>

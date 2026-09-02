@@ -125,6 +125,137 @@ public class SchemaReaderTests
     }
 
     [Test]
+    public void ListTables_NamePattern_WithoutWildcard_MatchesAnywhere()
+    {
+        var rows = ParseArray(_reader.ListTables(schema: null, namePattern: "Posicao"));
+        var names = rows.Select(r => r.GetProperty("table_name").GetString()).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(names, Has.Member("Posicao"));
+            Assert.That(names, Has.Member("MovimentoPosicao"), "A bare name means 'contains'.");
+            Assert.That(names, Has.No.Member("Instrumento"));
+        });
+    }
+
+    [Test]
+    public void ListTables_NamePattern_WithWildcard_IsPassedThroughAsWritten()
+    {
+        var rows = ParseArray(_reader.ListTables(schema: null, namePattern: "Posicao%"));
+        var names = rows.Select(r => r.GetProperty("table_name").GetString()).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(names, Has.Member("Posicao"));
+            Assert.That(names, Has.No.Member("MovimentoPosicao"), "A leading anchor must be honoured.");
+        });
+    }
+
+    [Test]
+    public void ListViews_NamePattern_Filters()
+    {
+        var rows = ParseArray(_reader.ListViews(schema: null, namePattern: "Detalhada"));
+        var names = rows.Select(r => r.GetProperty("view_name").GetString()).ToList();
+
+        Assert.That(names, Is.EquivalentTo(new[] { "vw_PosicaoDetalhada" }));
+    }
+
+    #region FindColumns
+
+    [Test]
+    public void FindColumns_MatchesAcrossTablesAndViews()
+    {
+        var result = ParseObject(_reader.FindColumns("InstrumentoId", schema: null, includeViews: true));
+        var matches = result.GetProperty("matches").EnumerateArray().ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(matches.Any(m =>
+                m.GetProperty("object_name").GetString() == "Instrumento" &&
+                m.GetProperty("object_type").GetString() == "TABLE"), Is.True);
+            Assert.That(matches.Any(m =>
+                m.GetProperty("object_name").GetString() == "Posicao" &&
+                m.GetProperty("object_type").GetString() == "TABLE"), Is.True);
+            Assert.That(matches.Any(m =>
+                m.GetProperty("object_name").GetString() == "vw_InstrumentosAtivos" &&
+                m.GetProperty("object_type").GetString() == "VIEW"), Is.True);
+        });
+    }
+
+    [Test]
+    public void FindColumns_ExcludingViews_ReturnsTablesOnly()
+    {
+        var result = ParseObject(_reader.FindColumns("InstrumentoId", schema: null, includeViews: false));
+        var kinds = result.GetProperty("matches").EnumerateArray()
+            .Select(m => m.GetProperty("object_type").GetString())
+            .Distinct()
+            .ToList();
+
+        Assert.That(kinds, Is.EquivalentTo(new[] { "TABLE" }));
+    }
+
+    [Test]
+    public void FindColumns_PartialName_MatchesAnywhere()
+    {
+        var result = ParseObject(_reader.FindColumns("Data", schema: null, includeViews: false));
+        var columns = result.GetProperty("matches").EnumerateArray()
+            .Select(m => m.GetProperty("column_name").GetString())
+            .Distinct()
+            .ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(columns, Has.Member("DataVencimento"));
+            Assert.That(columns, Has.Member("DataRef"));
+            Assert.That(columns, Has.Member("DataEvento"));
+        });
+    }
+
+    [Test]
+    public void FindColumns_CarriesTheTypeDeclaration()
+    {
+        var result = ParseObject(_reader.FindColumns("Observacao", schema: "financeiro", includeViews: false));
+        var match = result.GetProperty("matches").EnumerateArray().Single();
+
+        Assert.That(match.GetProperty("type_declaration").GetString(), Is.EqualTo("nvarchar(250)"));
+    }
+
+    [Test]
+    public void FindColumns_RestrictedToOneSchema()
+    {
+        var result = ParseObject(_reader.FindColumns("Id", schema: "financeiro", includeViews: false));
+        var schemas = result.GetProperty("matches").EnumerateArray()
+            .Select(m => m.GetProperty("schema_name").GetString())
+            .Distinct()
+            .ToList();
+
+        Assert.That(schemas, Is.EquivalentTo(new[] { "financeiro" }));
+    }
+
+    [Test]
+    public void FindColumns_NoMatch_ReturnsEmptyRatherThanFailing()
+    {
+        var result = ParseObject(_reader.FindColumns("ColunaQueNaoExiste", schema: null, includeViews: true));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.GetProperty("match_count").GetInt32(), Is.Zero);
+            Assert.That(result.GetProperty("matches").GetArrayLength(), Is.Zero);
+        });
+    }
+
+    [Test]
+    public void FindColumns_EmptyPattern_ExplainsWhatIsNeeded()
+    {
+        var ex = Assert.Throws<ToolInputException>(
+            () => _reader.FindColumns("  ", schema: null, includeViews: true));
+
+        Assert.That(ex!.Hint, Does.Contain("column name"));
+    }
+
+    #endregion
+
+    [Test]
     public void ListViews_NoFilter_ReturnsBothViews()
     {
         var rows = ParseArray(_reader.ListViews(schema: null));
@@ -430,52 +561,74 @@ public class SchemaReaderTests
 
     #region QueryTable
 
+    /// <summary>The rows inside the query_table envelope.</summary>
+    private static JsonElement[] Rows(string json) =>
+        ParseObject(json).GetProperty("rows").EnumerateArray().ToArray();
+
     [Test]
     public void QueryTable_DefaultTop_Returns100OrLess()
     {
-        var rows = ParseArray(_reader.QueryTable(
+        var rows = Rows(_reader.QueryTable(
             "Instrumento", schema: null,
             columns: null, where: null, orderBy: null,
             top: 100, skip: 0, maxRows: 10_000));
 
         // All 5 seeded rows are returned
-        Assert.That(rows.Length, Is.EqualTo(5));
+        Assert.That(rows, Has.Length.EqualTo(5));
     }
 
     [Test]
     public void QueryTable_WithWhere_FiltersCorrectly()
     {
-        var rows = ParseArray(_reader.QueryTable(
+        var rows = Rows(_reader.QueryTable(
             "Instrumento", schema: null,
             columns: null, where: "Ativo = 1", orderBy: null,
             top: 100, skip: 0, maxRows: 10_000));
 
-        Assert.That(rows.Length, Is.EqualTo(4));
+        Assert.That(rows, Has.Length.EqualTo(4));
     }
 
     [Test]
     public void QueryTable_WithColumns_ReturnsOnlySelectedColumns()
     {
-        var rows = ParseArray(_reader.QueryTable(
+        var rows = Rows(_reader.QueryTable(
             "Instrumento", schema: null,
             columns: "Codigo, Descricao", where: null, orderBy: null,
             top: 100, skip: 0, maxRows: 10_000));
 
         var first = rows[0];
-        Assert.That(first.TryGetProperty("Codigo",    out _), Is.True);
-        Assert.That(first.TryGetProperty("Descricao", out _), Is.True);
-        Assert.That(first.TryGetProperty("Ativo",     out _), Is.False);
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.TryGetProperty("Codigo",    out _), Is.True);
+            Assert.That(first.TryGetProperty("Descricao", out _), Is.True);
+            Assert.That(first.TryGetProperty("Ativo",     out _), Is.False);
+        });
+    }
+
+    /// <remarks>
+    /// Reserved words are why columns are bracketed on the way into the SELECT. Worth a test of its
+    /// own: a caller has no way to know whether it must quote them, and should not have to.
+    /// </remarks>
+    [Test]
+    public void QueryTable_ColumnNamesThatAreReservedWords_NeedNoQuoting()
+    {
+        var rows = Rows(_reader.QueryTable(
+            "MovimentoPosicao", schema: "financeiro",
+            columns: "Tipo, Quantidade", where: null, orderBy: null,
+            top: 5, skip: 0, maxRows: 10_000));
+
+        Assert.That(rows[0].TryGetProperty("Tipo", out _), Is.True);
     }
 
     [Test]
     public void QueryTable_WithTopAndSkip_Paginates()
     {
-        var page1 = ParseArray(_reader.QueryTable(
+        var page1 = Rows(_reader.QueryTable(
             "Instrumento", schema: null,
             columns: "InstrumentoId", where: null, orderBy: "InstrumentoId",
             top: 2, skip: 0, maxRows: 10_000));
 
-        var page2 = ParseArray(_reader.QueryTable(
+        var page2 = Rows(_reader.QueryTable(
             "Instrumento", schema: null,
             columns: "InstrumentoId", where: null, orderBy: "InstrumentoId",
             top: 2, skip: 2, maxRows: 10_000));
@@ -483,44 +636,169 @@ public class SchemaReaderTests
         var ids1 = page1.Select(r => r.GetProperty("InstrumentoId").GetInt32()).ToList();
         var ids2 = page2.Select(r => r.GetProperty("InstrumentoId").GetInt32()).ToList();
 
-        Assert.That(ids1, Has.Count.EqualTo(2));
-        Assert.That(ids2, Has.Count.EqualTo(2));
-        Assert.That(ids1.Intersect(ids2), Is.Empty);
+        Assert.Multiple(() =>
+        {
+            Assert.That(ids1, Has.Count.EqualTo(2));
+            Assert.That(ids2, Has.Count.EqualTo(2));
+            Assert.That(ids1.Intersect(ids2), Is.Empty);
+        });
     }
 
     [Test]
     public void QueryTable_TopExceedsMaxRows_IsClamped()
     {
         // maxRows = 3, top = 100 => at most 3 rows should be returned
-        var rows = ParseArray(_reader.QueryTable(
+        var result = ParseObject(_reader.QueryTable(
             "Instrumento", schema: null,
             columns: null, where: null, orderBy: null,
             top: 100, skip: 0, maxRows: 3));
 
-        Assert.That(rows.Length, Is.LessThanOrEqualTo(3));
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.GetProperty("rows").GetArrayLength(), Is.LessThanOrEqualTo(3));
+            Assert.That(result.GetProperty("top_applied").GetInt32(), Is.EqualTo(3));
+            // The ceiling silently overrode what was asked for, so it is stated.
+            Assert.That(result.GetProperty("top_requested").GetInt32(), Is.EqualTo(100));
+        });
+    }
+
+    /// <remarks>
+    /// The point of the envelope. A bare array of 2 rows cannot be told apart from a table that has
+    /// 2 rows, and a caller that cannot tell will assert the second.
+    /// </remarks>
+    [Test]
+    public void QueryTable_WhenRowsAreLeftBehind_SaysSo()
+    {
+        var result = ParseObject(_reader.QueryTable(
+            "Instrumento", schema: null,
+            columns: null, where: null, orderBy: "InstrumentoId",
+            top: 2, skip: 0, maxRows: 10_000));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.GetProperty("truncated").GetBoolean(), Is.True);
+            Assert.That(result.GetProperty("row_count").GetInt32(), Is.EqualTo(2));
+            Assert.That(result.GetProperty("rows").GetArrayLength(), Is.EqualTo(2),
+                "The probe row must never reach the caller.");
+        });
     }
 
     [Test]
-    public void QueryTable_InvalidTableIdentifier_ThrowsArgumentException() => Assert.Throws<ArgumentException>(() => _reader.QueryTable(
+    public void QueryTable_WhenEveryRowFits_IsNotTruncated()
+    {
+        var result = ParseObject(_reader.QueryTable(
+            "Instrumento", schema: null,
+            columns: null, where: null, orderBy: null,
+            top: 100, skip: 0, maxRows: 10_000));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.GetProperty("truncated").GetBoolean(), Is.False);
+            Assert.That(result.GetProperty("row_count").GetInt32(), Is.EqualTo(5));
+        });
+    }
+
+    [Test]
+    public void QueryTable_ExactlyAsManyRowsAsRequested_IsNotTruncated()
+    {
+        // The boundary the probe row exists to get right: 5 rows in the table, top 5.
+        var result = ParseObject(_reader.QueryTable(
+            "Instrumento", schema: null,
+            columns: null, where: null, orderBy: null,
+            top: 5, skip: 0, maxRows: 10_000));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.GetProperty("row_count").GetInt32(), Is.EqualTo(5));
+            Assert.That(result.GetProperty("truncated").GetBoolean(), Is.False);
+        });
+    }
+
+    [Test]
+    public void QueryTable_TruncationIsDetectedWhenPaginating()
+    {
+        var result = ParseObject(_reader.QueryTable(
+            "Instrumento", schema: null,
+            columns: "InstrumentoId", where: null, orderBy: "InstrumentoId",
+            top: 2, skip: 1, maxRows: 10_000));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.GetProperty("rows").GetArrayLength(), Is.EqualTo(2));
+            Assert.That(result.GetProperty("truncated").GetBoolean(), Is.True);
+            Assert.That(result.GetProperty("skip").GetInt32(), Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void QueryTable_Envelope_NamesTheObjectItRead()
+    {
+        var result = ParseObject(_reader.QueryTable(
+            "Posicao", schema: "financeiro",
+            columns: null, where: null, orderBy: null,
+            top: 10, skip: 0, maxRows: 10_000));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.GetProperty("table").GetProperty("schema").GetString(), Is.EqualTo("financeiro"));
+            Assert.That(result.GetProperty("table").GetProperty("name").GetString(), Is.EqualTo("Posicao"));
+            Assert.That(result.GetProperty("max_query_rows").GetInt32(), Is.EqualTo(10_000));
+        });
+    }
+
+    [Test]
+    public void QueryTable_InvalidTableIdentifier_Throws() => Assert.Throws<ToolInputException>(() => _reader.QueryTable(
                                                                                         "dbo.Instrumento", schema: null,  // dot in name = invalid
                                                                                         columns: null, where: null, orderBy: null,
                                                                                         top: 10, skip: 0, maxRows: 10_000));
 
+    /// <remarks>
+    /// A JSON array is the natural guess for a comma-separated parameter, especially for a caller
+    /// whose client could not show it the type. The failure should say exactly that, once.
+    /// </remarks>
+    [Test]
+    public void QueryTable_ColumnsAsJsonArray_ExplainsTheCorrectShape()
+    {
+        var ex = Assert.Throws<ToolInputException>(() => _reader.QueryTable(
+            "Instrumento", schema: null,
+            columns: "[\"Codigo\", \"Descricao\"]", where: null, orderBy: null,
+            top: 10, skip: 0, maxRows: 10_000));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.Message, Does.Contain("columns"));
+            Assert.That(ex.Hint, Does.Contain("comma-separated"));
+            Assert.That(ex.Example, Is.Not.Null, "A worked example is what turns the retry into a fix.");
+        });
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void QueryTable_NonPositiveTop_ExplainsTheDefault(int top)
+    {
+        var ex = Assert.Throws<ToolInputException>(() => _reader.QueryTable(
+            "Instrumento", schema: null,
+            columns: null, where: null, orderBy: null,
+            top: top, skip: 0, maxRows: 10_000));
+
+        Assert.That(ex!.Hint, Does.Contain("100"));
+    }
+
     [Test]
     public void QueryTable_SchemaFinanceiro_ReturnsRows()
     {
-        var rows = ParseArray(_reader.QueryTable(
+        var rows = Rows(_reader.QueryTable(
             "Posicao", schema: "financeiro",
             columns: null, where: null, orderBy: null,
             top: 100, skip: 0, maxRows: 10_000));
 
-        Assert.That(rows.Length, Is.EqualTo(3));
+        Assert.That(rows, Has.Length.EqualTo(3));
     }
 
     [Test]
     public void QueryTable_GroupByAndAggregates_ReturnsAggregatedRows()
     {
-        var rows = ParseArray(_reader.QueryTable(
+        var rows = Rows(_reader.QueryTable(
             table: "Posicao",
             schema: "financeiro",
             columns: null,
@@ -533,14 +811,17 @@ public class SchemaReaderTests
             aggregates: "SUM(Quantidade) AS QuantidadeTotal, MAX(ValorMercado) AS ValorMaximo",
             samplePercent: null));
 
-        Assert.That(rows.Length, Is.EqualTo(3));
-        Assert.That(rows[0].TryGetProperty("QuantidadeTotal", out _), Is.True);
+        Assert.Multiple(() =>
+        {
+            Assert.That(rows, Has.Length.EqualTo(3));
+            Assert.That(rows[0].TryGetProperty("QuantidadeTotal", out _), Is.True);
+        });
     }
 
     [Test]
     public void QueryTable_WithSampling_ReturnsSubset()
     {
-        var rows = ParseArray(_reader.QueryTable(
+        var rows = Rows(_reader.QueryTable(
             table: "Instrumento",
             schema: "dbo",
             columns: "InstrumentoId",
@@ -553,27 +834,32 @@ public class SchemaReaderTests
             aggregates: null,
             samplePercent: 40));
 
-        Assert.That(rows.Length, Is.LessThanOrEqualTo(5));
+        Assert.That(rows, Has.Length.LessThanOrEqualTo(5));
     }
 
     [Test]
-    public void QueryTable_InvalidAggregate_ThrowsArgumentException() => Assert.Throws<ArgumentException>(() => _reader.QueryTable(
-                                                                                  table: "Instrumento",
-                                                                                  schema: "dbo",
-                                                                                  columns: null,
-                                                                                  where: null,
-                                                                                  orderBy: null,
-                                                                                  top: 10,
-                                                                                  skip: 0,
-                                                                                  maxRows: 10_000,
-                                                                                  groupBy: "Codigo",
-                                                                                  aggregates: "MEDIAN(PrecoCusto)",
-                                                                                  samplePercent: null));
+    public void QueryTable_InvalidAggregate_ExplainsWhatIsAccepted()
+    {
+        var ex = Assert.Throws<ToolInputException>(() => _reader.QueryTable(
+            table: "Instrumento",
+            schema: "dbo",
+            columns: null,
+            where: null,
+            orderBy: null,
+            top: 10,
+            skip: 0,
+            maxRows: 10_000,
+            groupBy: "Codigo",
+            aggregates: "MEDIAN(PrecoCusto)",
+            samplePercent: null));
+
+        Assert.That(ex!.Hint, Does.Contain("COUNT"));
+    }
 
     [Test]
     public void QueryTable_SqlError_IsWrappedWithObjectName()
     {
-        var ex = Assert.Throws<InvalidOperationException>(() => _reader.QueryTable(
+        var ex = Assert.Throws<ToolInputException>(() => _reader.QueryTable(
             table: "Instrumento",
             schema: "dbo",
             columns: "NaoExiste",
