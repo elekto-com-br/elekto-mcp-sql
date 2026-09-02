@@ -57,12 +57,13 @@ with no warranties of any kind.
 | `get_database_overview`    | High-level database summary (counts, size, connection metadata) |
 | `get_schema_summary`       | Aggregated metrics by schema (objects, rows, size)           |
 | `list_schemas`             | Schemas in a database (excluding system schemas)             |
-| `list_tables`              | User tables with schema, dates, approximate rows and estimated size |
-| `list_views`               | User views                                                   |
+| `list_tables`              | User tables with schema, dates, approximate rows and estimated size; filterable by schema and name pattern |
+| `list_views`               | User views, filterable by schema and name pattern            |
+| `find_columns`             | Every table and view holding a column whose name matches a pattern |
 | `list_procedures`          | User stored procedures (with basic complexity metrics)       |
 | `list_functions`           | User-defined functions (with basic complexity metrics)       |
-| `get_table_schema`         | Columns, PKs, FKs, checks, uniques, indexes and computed/collation metadata |
-| `get_view_definition`      | DDL definition + columns of a view                           |
+| `get_table_schema`         | Columns with unambiguous type declarations, all extended properties, PKs, FKs, checks, uniques and indexes with key order and declared key width |
+| `get_view_definition`      | DDL definition + columns of a view, with the same column detail |
 | `get_procedure_definition` | CREATE PROCEDURE text                                        |
 | `get_function_definition`  | CREATE FUNCTION text                                         |
 | `get_dependency_graph`     | Object dependency edges (FK + SQL dependencies)              |
@@ -72,6 +73,89 @@ with no warranties of any kind.
 | `compare_schemas`          | Compares table/column structure between two configured databases |
 | `generate_dependency_dot`  | Graphviz DOT dependency graph with node metadata (`node_kind`) |
 | `query_table`              | SELECT from a table or view with filtering, grouping, secure aggregates, sorting, sampling and pagination |
+
+## Upgrading from 1.x
+
+Version 2.0.0 changes what the tools return and how their parameters are declared. Nothing
+needs reconfiguring — connection files, `.mcp.json` and the CLI arguments are unchanged —
+but anything that parses the output will notice:
+
+| Change | What to do |
+| ------ | ---------- |
+| `query_table` returns an object, not an array | Read the rows from `rows`; check `truncated` |
+| Failures return `ok: false` content instead of raising a tool error | Test for `ok === false` before treating the payload as data |
+| Column results gained `type_declaration`, `max_length_chars`, `is_persisted` and `extended_properties` | Prefer `type_declaration` over `max_length`, which is bytes |
+| `description` on a column is now an alias for `extended_properties.MS_Description` | Nothing; it still works |
+| Optional tool parameters are no longer nullable | Nothing over MCP. Direct C# callers pass `""` (or `0`) instead of `null` |
+| New: `find_columns`; `list_tables` and `list_views` take a `name_pattern` | Nothing; both are additive |
+
+Everything else — every other tool, every other field — is unchanged.
+
+## Reading the Results
+
+Three things about the shape of what comes back are worth knowing before you rely on it.
+
+### Column types are reported twice, on purpose
+
+`sys.columns.max_length` is documented in **bytes**. A `nvarchar(250)` column therefore
+reports `500`, and reading that as characters is wrong by a factor of two — silently, because
+nothing downstream contradicts it. That raw value is still reported, for fidelity to the
+catalog, but never on its own:
+
+```json
+{
+  "column_name": "Tag1",
+  "data_type": "nvarchar",
+  "type_declaration": "nvarchar(250)",
+  "max_length": 500,
+  "max_length_chars": 250
+}
+```
+
+Use `type_declaration` or `max_length_chars`. They cannot be misread.
+
+Columns also carry `extended_properties` — every property, not only `MS_Description` —
+so an application's own conventions (display formats, units, masks) are visible, and
+`is_persisted` for computed columns.
+
+### `query_table` returns an envelope, not a bare array
+
+A bare array of two rows cannot be told apart from a table that holds two rows. The
+result therefore states what it is:
+
+```json
+{
+  "table": { "schema": "Feeder", "name": "GenericSecurity" },
+  "row_count": 100,
+  "truncated": true,
+  "top_applied": 100,
+  "skip": 0,
+  "max_query_rows": 10000,
+  "rows": [ ... ]
+}
+```
+
+`truncated` is measured rather than inferred: one row past the limit is fetched and
+discarded. `top_requested` appears only when `max_query_rows` overrode what was asked for.
+
+### Failures come back as content
+
+An exception thrown from an MCP tool does not reach the caller — the host replaces it with
+a generic line. Failures are therefore returned as a normal result carrying `ok: false`:
+
+```json
+{
+  "ok": false,
+  "tool": "query_table",
+  "error": "'columns' looks like JSON: [\"Source\", \"Name\"]",
+  "hint": "'columns' is a plain comma-separated string, not a JSON array or object.",
+  "example": { "columns": "Source, Name, ReferenceDate" }
+}
+```
+
+The trade-off is deliberate: the host no longer marks the call as an error, but the caller
+can read what went wrong and correct it. Successful results are unchanged and never carry
+an `ok` field.
 
 ## Installation
 
@@ -128,19 +212,26 @@ dotnet publish -c Release -o C:\Tools\Elekto.Mcp.Sql
 
 ## Configuration
 
-The server resolves connections by walking the following chain and using the first match:
+`--connections <path>`, when given, is used on its own and no other source is consulted.
 
-| Priority | Source                                                       |
-| -------- | ------------------------------------------------------------ |
-| 1        | `--connections <path>` argument                              |
-| 2        | `.elekto.mcp.sql.local.json` no diretório de trabalho (raiz do projeto) |
-| 3        | `.elekto.mcp.sql.local.json` no diretório home do usuário (`~`) |
-| 4        | Seção `ConnectionStrings` em `appsettings.json` / `appsettings.Development.json` |
-| 5        | Elemento `<connectionStrings>` em `web.config` / `App.config` |
-| 6        | Variável de ambiente `MCP_SQL_CONNECTIONS` (compatibilidade legada) |
+Otherwise every source below is read and **merged**, so a database defined in one source and
+a database defined in another are both available. Where the same database name appears in
+more than one, the higher-priority source wins:
 
-At startup the server logs the source it chose to stderr, making it easy to diagnose
-which file is in effect.
+| Priority       | Source                                                                          |
+| -------------- | ------------------------------------------------------------------------------- |
+| 1 (highest)    | `.elekto.mcp.sql.local.json` in the working directory (project root)             |
+| 2              | `ConnectionStrings` in `appsettings.Development.json`                            |
+| 3              | `ConnectionStrings` in `appsettings.json`                                        |
+| 4              | `<connectionStrings>` in `App.config` / `web.config`                             |
+| 5              | `.elekto.mcp.sql.local.json` in the user's home directory (`~`)                  |
+| 6 (lowest)     | `MCP_SQL_CONNECTIONS` environment variable (legacy compatibility)                |
+
+Note that the home-directory file sits *below* the project's `appsettings.json`: it holds
+your defaults, and the project it is used in overrides them.
+
+At startup the server logs every source that contributed to stderr, making it easy to
+diagnose which files are in effect.
 
 ### Zero-config for existing .NET projects
 
@@ -299,7 +390,8 @@ For internal use, this is preferred over self-contained (~81 MB).
 - The WHERE clause is accepted as free text (necessary for flexibility), but DML is impossible
   since the command is always built as `SELECT TOP n ... FROM [t] WHERE ...`.
 - `max_query_rows` caps the maximum number of rows returned per database (default 10,000).
-  The `top` parameter in `query_table` is always clamped to this value.
+  The `top` parameter in `query_table` is always clamped to this value, and the result says
+  so via `top_requested` and `truncated` rather than quietly returning a short answer.
 - **Even so**, avoid exposing this server in untrusted environments or with sensitive data.
   Use firewalls and access policies to restrict who can execute queries via MCP. Use
   database accounts with the minimum required privileges (read-only) for all configured
