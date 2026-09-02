@@ -268,41 +268,7 @@ public sealed class SchemaReader
 
         using var conn = OpenConnection();
 
-        using var cmdCols = CreateCommand(conn, """
-            SELECT c.column_id,
-                   c.name                                          AS column_name,
-                   tp.name                                         AS data_type,
-                   c.max_length,
-                   c.precision,
-                   c.scale,
-                   c.collation_name,
-                   c.is_nullable,
-                   c.is_identity,
-                   c.is_computed,
-                   cc.definition                                   AS computed_definition,
-                   dc.definition                                   AS default_value,
-                   ep.value                                        AS description
-            FROM sys.columns c
-            JOIN sys.objects  o  ON c.object_id  = o.object_id
-            JOIN sys.schemas  s  ON o.schema_id  = s.schema_id
-            JOIN sys.types    tp ON c.user_type_id = tp.user_type_id
-            LEFT JOIN sys.default_constraints dc
-                   ON c.default_object_id = dc.object_id
-            LEFT JOIN sys.computed_columns cc
-                   ON c.object_id = cc.object_id AND c.column_id = cc.column_id
-            LEFT JOIN sys.extended_properties ep
-                   ON ep.major_id = c.object_id
-                  AND ep.minor_id = c.column_id
-                  AND ep.name = 'MS_Description'
-                  AND ep.class = 1
-            WHERE o.name = @table
-              AND o.type IN ('U','V')
-              AND (@schema IS NULL OR s.name = @schema)
-            ORDER BY c.column_id;
-            """);
-        cmdCols.Parameters.AddWithValue("@table", table);
-        cmdCols.Parameters.AddWithValue("@schema", (object?)schema ?? DBNull.Value);
-        var columns = QueryToJson(cmdCols);
+        var columns = ReadColumns(conn, table, schema);
 
         using var cmdPk = CreateCommand(conn, """
             SELECT c.name AS column_name,
@@ -352,9 +318,20 @@ public sealed class SchemaReader
             SELECT i.name                   AS index_name,
                    i.type_desc              AS index_type,
                    i.is_unique,
-                   STRING_AGG(CASE WHEN ic.is_included_column = 0 THEN c.name END, ', ') AS key_columns,
-                   STRING_AGG(CASE WHEN ic.is_included_column = 1 THEN c.name END, ', ') AS included_columns,
-                   i.filter_definition
+                   -- One ordering serves both aggregates: SQL Server rejects incompatible orderings
+                   -- in the same scope. Key columns carry key_ordinal 1..n, included columns carry 0
+                   -- and fall through to index_column_id, so each list comes out in its own order.
+                   STRING_AGG(CASE WHEN ic.is_included_column = 0 THEN c.name END, ', ')
+                       WITHIN GROUP (ORDER BY ic.key_ordinal, ic.index_column_id) AS key_columns,
+                   STRING_AGG(CASE WHEN ic.is_included_column = 1 THEN c.name END, ', ')
+                       WITHIN GROUP (ORDER BY ic.key_ordinal, ic.index_column_id) AS included_columns,
+                   i.filter_definition,
+                   -- Declared width of the key, which is what the 900-byte clustered / 1700-byte
+                   -- nonclustered limit is checked against. NULL when a MAX column makes it unbounded.
+                   CASE WHEN MAX(CASE WHEN ic.is_included_column = 0 AND c.max_length = -1 THEN 1 ELSE 0 END) = 1
+                        THEN NULL
+                        ELSE SUM(CASE WHEN ic.is_included_column = 0 THEN c.max_length ELSE 0 END)
+                   END AS key_length_bytes
             FROM sys.indexes i
             JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
             JOIN sys.columns c        ON ic.object_id = c.object_id AND ic.column_id = c.column_id
@@ -404,13 +381,146 @@ public sealed class SchemaReader
 
         return JsonSerializer.Serialize(new
         {
-            columns = JsonDocument.Parse(columns).RootElement,
+            columns,
             primary_keys = JsonDocument.Parse(primaryKeys).RootElement,
             foreign_keys = JsonDocument.Parse(foreignKeys).RootElement,
             indexes = JsonDocument.Parse(indexes).RootElement,
             checks = JsonDocument.Parse(checks).RootElement,
             unique_constraints = JsonDocument.Parse(uniques).RootElement
         });
+    }
+
+    /// <summary>
+    /// Reads the columns of a table or view, enriched past what <c>sys.columns</c> states directly:
+    /// an unambiguous <c>type_declaration</c>, the length in its declared unit, whether a computed
+    /// column is persisted, and every extended property rather than only <c>MS_Description</c>.
+    /// </summary>
+    private static List<Dictionary<string, object?>> ReadColumns(SqlConnection conn, string table, string? schema)
+    {
+        var extendedProperties = ReadColumnExtendedProperties(conn, table, schema);
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT c.column_id,
+                   c.name                 AS column_name,
+                   tp.name                AS data_type,
+                   c.max_length,
+                   c.precision,
+                   c.scale,
+                   c.collation_name,
+                   c.is_nullable,
+                   c.is_identity,
+                   c.is_computed,
+                   cc.definition          AS computed_definition,
+                   cc.is_persisted        AS is_persisted,
+                   dc.definition          AS default_value
+            FROM sys.columns c
+            JOIN sys.objects  o  ON c.object_id  = o.object_id
+            JOIN sys.schemas  s  ON o.schema_id  = s.schema_id
+            JOIN sys.types    tp ON c.user_type_id = tp.user_type_id
+            LEFT JOIN sys.default_constraints dc
+                   ON c.default_object_id = dc.object_id
+            LEFT JOIN sys.computed_columns cc
+                   ON c.object_id = cc.object_id AND c.column_id = cc.column_id
+            WHERE o.name = @table
+              AND o.type IN ('U','V')
+              AND (@schema IS NULL OR s.name = @schema)
+            ORDER BY c.column_id;
+            """;
+        cmd.Parameters.AddWithValue("@table", table);
+        cmd.Parameters.AddWithValue("@schema", (object?)schema ?? DBNull.Value);
+
+        var result = new List<Dictionary<string, object?>>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var name = reader.GetString(reader.GetOrdinal("column_name"));
+            var dataType = reader.GetString(reader.GetOrdinal("data_type"));
+            var maxLength = reader.GetInt16(reader.GetOrdinal("max_length"));
+            var precision = reader.GetByte(reader.GetOrdinal("precision"));
+            var scale = reader.GetByte(reader.GetOrdinal("scale"));
+
+            var properties = extendedProperties.TryGetValue(name, out var found)
+                ? found
+                : new Dictionary<string, object?>();
+
+            result.Add(new Dictionary<string, object?>
+            {
+                ["column_id"] = reader.GetInt32(reader.GetOrdinal("column_id")),
+                ["column_name"] = name,
+                ["data_type"] = dataType,
+                // The declaration, unambiguous: 'nvarchar(250)', 'decimal(18,6)', 'char(3)'.
+                ["type_declaration"] = SqlTypeFormatter.Format(dataType, maxLength, precision, scale),
+                // sys.columns.max_length, in BYTES, as the catalog reports it.
+                ["max_length"] = maxLength,
+                // The same length in the unit the declaration uses; null when the type has no length.
+                ["max_length_chars"] = SqlTypeFormatter.GetMaxLengthChars(dataType, maxLength),
+                ["precision"] = precision,
+                ["scale"] = scale,
+                ["collation_name"] = GetNullable(reader, "collation_name"),
+                ["is_nullable"] = reader.GetBoolean(reader.GetOrdinal("is_nullable")),
+                ["is_identity"] = reader.GetBoolean(reader.GetOrdinal("is_identity")),
+                ["is_computed"] = reader.GetBoolean(reader.GetOrdinal("is_computed")),
+                ["computed_definition"] = GetNullable(reader, "computed_definition"),
+                ["is_persisted"] = GetNullable(reader, "is_persisted"),
+                ["default_value"] = GetNullable(reader, "default_value"),
+                // Kept as a convenience alias for extended_properties.MS_Description.
+                ["description"] = properties.GetValueOrDefault("MS_Description"),
+                ["extended_properties"] = properties
+            });
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Every extended property of every column of the object, by column name — not just
+    /// <c>MS_Description</c>. Applications routinely keep their own conventions here (display
+    /// formats, units, masks), and they are invisible to a reader that only asks for the description.
+    /// </summary>
+    private static Dictionary<string, Dictionary<string, object?>> ReadColumnExtendedProperties(
+        SqlConnection conn, string table, string? schema)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            SELECT c.name AS column_name,
+                   ep.name AS property_name,
+                   ep.value AS property_value
+            FROM sys.extended_properties ep
+            JOIN sys.objects o ON ep.major_id = o.object_id
+            JOIN sys.schemas s ON o.schema_id = s.schema_id
+            JOIN sys.columns c ON c.object_id = ep.major_id AND c.column_id = ep.minor_id
+            WHERE ep.class = 1
+              AND o.name = @table
+              AND o.type IN ('U','V')
+              AND (@schema IS NULL OR s.name = @schema)
+            ORDER BY c.column_id, ep.name;
+            """;
+        cmd.Parameters.AddWithValue("@table", table);
+        cmd.Parameters.AddWithValue("@schema", (object?)schema ?? DBNull.Value);
+
+        var result = new Dictionary<string, Dictionary<string, object?>>(StringComparer.OrdinalIgnoreCase);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var column = reader.GetString(0);
+            if (!result.TryGetValue(column, out var properties))
+            {
+                properties = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+                result[column] = properties;
+            }
+
+            // sql_variant, so read it as an object and let the serializer render it.
+            properties[reader.GetString(1)] = reader.IsDBNull(2) ? null : reader.GetValue(2);
+        }
+
+        return result;
+    }
+
+    private static object? GetNullable(SqlDataReader reader, string columnName)
+    {
+        var ordinal = reader.GetOrdinal(columnName);
+        return reader.IsDBNull(ordinal) ? null : reader.GetValue(ordinal);
     }
 
     #endregion
@@ -445,28 +555,15 @@ public sealed class SchemaReader
         var definition = GetObjectDefinition(view, schema, "V");
 
         using var conn = OpenConnection();
-        using var cmd = CreateCommand(conn, """
-            SELECT c.column_id,
-                   c.name       AS column_name,
-                   tp.name      AS data_type,
-                   c.is_nullable
-            FROM sys.columns c
-            JOIN sys.objects  o  ON c.object_id   = o.object_id
-            JOIN sys.schemas  s  ON o.schema_id   = s.schema_id
-            JOIN sys.types    tp ON c.user_type_id = tp.user_type_id
-            WHERE o.name = @view
-              AND o.type = 'V'
-              AND (@schema IS NULL OR s.name = @schema)
-            ORDER BY c.column_id;
-            """);
-        cmd.Parameters.AddWithValue("@view", view);
-        cmd.Parameters.AddWithValue("@schema", (object?)schema ?? DBNull.Value);
-        var columns = QueryToJson(cmd);
+
+        // A view's columns live in sys.columns exactly as a table's do, so the same reader applies
+        // and the view gets the unambiguous type declaration for free.
+        var columns = ReadColumns(conn, view, schema);
 
         return JsonSerializer.Serialize(new
         {
             definition = JsonDocument.Parse(definition).RootElement,
-            columns = JsonDocument.Parse(columns).RootElement
+            columns
         });
     }
 
@@ -613,9 +710,9 @@ public sealed class SchemaReader
 
         using var conn = OpenConnection();
 
-        var metadata = new List<(string Name, string Type)>();
+        var metadata = new List<(string Name, string Type, string Declaration)>();
         using (var cmdColumns = CreateCommand(conn, """
-            SELECT c.name AS column_name, tp.name AS data_type
+            SELECT c.name AS column_name, tp.name AS data_type, c.max_length, c.precision, c.scale
             FROM sys.columns c
             JOIN sys.types tp ON tp.user_type_id = c.user_type_id
             WHERE c.object_id = OBJECT_ID(QUOTENAME(@schema) + '.' + QUOTENAME(@table))
@@ -630,13 +727,19 @@ public sealed class SchemaReader
             {
                 var name = reader.GetString(0);
                 if (selectedColumns.Count == 0 || selectedColumns.Contains(name, StringComparer.OrdinalIgnoreCase))
-                    metadata.Add((name, reader.GetString(1)));
+                {
+                    var dataType = reader.GetString(1);
+                    metadata.Add((
+                        name,
+                        dataType,
+                        SqlTypeFormatter.Format(dataType, reader.GetInt16(2), reader.GetByte(3), reader.GetByte(4))));
+                }
             }
         }
 
         var profile = new List<Dictionary<string, object?>>();
 
-        foreach (var (columnName, dataType) in metadata)
+        foreach (var (columnName, dataType, typeDeclaration) in metadata)
         {
             var quotedTable = $"[{effectiveSchema}].[{table}]";
             var quotedColumn = $"[{columnName}]";
@@ -694,6 +797,7 @@ public sealed class SchemaReader
             {
                 ["column_name"] = columnName,
                 ["data_type"] = dataType,
+                ["type_declaration"] = typeDeclaration,
                 ["total_rows"] = totalRows,
                 ["null_count"] = nullCount,
                 ["null_ratio"] = totalRows == 0 ? 0m : Math.Round((decimal)nullCount / totalRows, 6),
@@ -1168,7 +1272,17 @@ public sealed class SchemaReader
                 "Use only letters, digits and underscores.");
     }
 
-    private sealed record ColumnDef(string DataType, bool IsNullable, short MaxLength, byte Precision, byte Scale);
+    /// <summary>
+    /// A column as the comparison sees it. <c>TypeDeclaration</c> is what a reader should look at —
+    /// a diff reported as "500 vs 100" is unreadable next to "nvarchar(250) vs nvarchar(50)".
+    /// </summary>
+    private sealed record ColumnDef(
+        string DataType,
+        string TypeDeclaration,
+        bool IsNullable,
+        short MaxLength,
+        byte Precision,
+        byte Scale);
     private sealed record DependencyNode(string Id, string Schema, string Name, string Kind);
     private sealed record DependencyEdge(
         string DependencyKind,
@@ -1276,12 +1390,18 @@ public sealed class SchemaReader
         {
             var fullTable = $"{reader.GetString(0)}.{reader.GetString(1)}";
             var column = reader.GetString(2);
+            var dataType = reader.GetString(3);
+            var maxLength = reader.GetInt16(5);
+            var precision = reader.GetByte(6);
+            var scale = reader.GetByte(7);
+
             var def = new ColumnDef(
-                reader.GetString(3),
+                dataType,
+                SqlTypeFormatter.Format(dataType, maxLength, precision, scale),
                 reader.GetBoolean(4),
-                reader.GetInt16(5),
-                reader.GetByte(6),
-                reader.GetByte(7));
+                maxLength,
+                precision,
+                scale);
 
             if (!snapshot.TryGetValue(fullTable, out var colMap))
             {

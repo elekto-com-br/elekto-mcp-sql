@@ -235,6 +235,134 @@ public class SchemaReaderTests
         Assert.That(indexes, Has.Member("IX_Posicao_DataRef"));
     }
 
+    /// <remarks>
+    /// The whole point of type_declaration: sys.columns reports nvarchar(250) as max_length 500,
+    /// because that field is bytes. Reading it as characters is silent and wrong by a factor of two.
+    /// </remarks>
+    [TestCase("Instrumento", null,         "Descricao",   "nvarchar(200)", 200)]
+    [TestCase("Instrumento", null,         "Codigo",      "varchar(20)",    20)]
+    [TestCase("Instrumento", null,         "PrecoCusto",  "decimal(18,6)", null)]
+    [TestCase("Instrumento", null,         "DataVencimento", "date",       null)]
+    [TestCase("Instrumento", null,         "Ativo",       "bit",           null)]
+    [TestCase("Posicao",     "financeiro", "Observacao",  "nvarchar(250)", 250)]
+    [TestCase("Posicao",     "financeiro", "Moeda",       "char(3)",         3)]
+    [TestCase("MovimentoPosicao", "financeiro", "DataEvento", "datetime2", null)]
+    public void GetTableSchema_TypeDeclaration_IsUnambiguous(
+        string table, string? schema, string column, string expectedDeclaration, int? expectedChars)
+    {
+        var result = ParseObject(_reader.GetTableSchema(table, schema));
+        var col = result.GetProperty("columns").EnumerateArray()
+            .First(c => c.GetProperty("column_name").GetString() == column);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(col.GetProperty("type_declaration").GetString(), Is.EqualTo(expectedDeclaration));
+
+            var chars = col.GetProperty("max_length_chars");
+            if (expectedChars is null)
+                Assert.That(chars.ValueKind, Is.EqualTo(JsonValueKind.Null),
+                    "A type with no declared length must not report one.");
+            else
+                Assert.That(chars.GetInt32(), Is.EqualTo(expectedChars));
+        });
+    }
+
+    [Test]
+    public void GetTableSchema_UnicodeColumn_KeepsRawMaxLengthInBytes()
+    {
+        var result = ParseObject(_reader.GetTableSchema("Posicao", schema: "financeiro"));
+        var col = result.GetProperty("columns").EnumerateArray()
+            .First(c => c.GetProperty("column_name").GetString() == "Observacao");
+
+        Assert.Multiple(() =>
+        {
+            // Fidelity to the catalog is kept; it is just no longer the only thing on offer.
+            Assert.That(col.GetProperty("max_length").GetInt32(), Is.EqualTo(500));
+            Assert.That(col.GetProperty("max_length_chars").GetInt32(), Is.EqualTo(250));
+        });
+    }
+
+    [TestCase("ValorMercado",   false)]
+    [TestCase("ValorPersistido", true)]
+    public void GetTableSchema_ComputedColumn_ReportsWhetherItIsPersisted(string column, bool expected)
+    {
+        var result = ParseObject(_reader.GetTableSchema("Posicao", schema: "financeiro"));
+        var col = result.GetProperty("columns").EnumerateArray()
+            .First(c => c.GetProperty("column_name").GetString() == column);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(col.GetProperty("is_computed").GetBoolean(), Is.True);
+            Assert.That(col.GetProperty("is_persisted").GetBoolean(), Is.EqualTo(expected));
+        });
+    }
+
+    [Test]
+    public void GetTableSchema_PlainColumn_HasNoPersistedFlag()
+    {
+        var result = ParseObject(_reader.GetTableSchema("Posicao", schema: "financeiro"));
+        var col = result.GetProperty("columns").EnumerateArray()
+            .First(c => c.GetProperty("column_name").GetString() == "Quantidade");
+
+        Assert.That(col.GetProperty("is_persisted").ValueKind, Is.EqualTo(JsonValueKind.Null));
+    }
+
+    [Test]
+    public void GetTableSchema_Column_ReturnsEveryExtendedProperty()
+    {
+        var result = ParseObject(_reader.GetTableSchema("Instrumento", schema: null));
+        var col = result.GetProperty("columns").EnumerateArray()
+            .First(c => c.GetProperty("column_name").GetString() == "PrecoCusto");
+        var properties = col.GetProperty("extended_properties");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(properties.GetProperty("MS_Description").GetString(), Is.EqualTo("Preço de custo unitário"));
+            // The application's own convention, invisible to a reader that only asks for MS_Description.
+            Assert.That(properties.GetProperty("PRA_Format").GetString(), Is.EqualTo("{0:N4}"));
+        });
+    }
+
+    [Test]
+    public void GetTableSchema_ColumnWithoutExtendedProperties_ReturnsEmptyMap()
+    {
+        var result = ParseObject(_reader.GetTableSchema("Instrumento", schema: null));
+        var col = result.GetProperty("columns").EnumerateArray()
+            .First(c => c.GetProperty("column_name").GetString() == "Ativo");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(col.GetProperty("extended_properties").EnumerateObject().Any(), Is.False);
+            Assert.That(col.GetProperty("description").ValueKind, Is.EqualTo(JsonValueKind.Null));
+        });
+    }
+
+    /// <remarks>
+    /// In a composite index the column order is the index. Reporting it unordered would be worse than
+    /// not reporting it, because it reads as authoritative.
+    /// </remarks>
+    [Test]
+    public void GetTableSchema_CompositeIndex_KeepsKeyColumnOrder()
+    {
+        var result = ParseObject(_reader.GetTableSchema("Posicao", schema: "financeiro"));
+        var index = result.GetProperty("indexes").EnumerateArray()
+            .First(i => i.GetProperty("index_name").GetString() == "IX_Posicao_Composto");
+
+        Assert.That(index.GetProperty("key_columns").GetString(),
+            Is.EqualTo("DataRef, InstrumentoId, PosicaoId"));
+    }
+
+    [Test]
+    public void GetTableSchema_Index_ReportsDeclaredKeyWidth()
+    {
+        var result = ParseObject(_reader.GetTableSchema("Posicao", schema: "financeiro"));
+        var index = result.GetProperty("indexes").EnumerateArray()
+            .First(i => i.GetProperty("index_name").GetString() == "IX_Posicao_Composto");
+
+        // date(3) + int(4) + int(4); the number the 900-byte key limit is checked against.
+        Assert.That(index.GetProperty("key_length_bytes").GetInt32(), Is.EqualTo(11));
+    }
+
     [Test]
     public void GetTableSchema_ColumnWithDescription_ReturnsExtendedProperty()
     {

@@ -82,7 +82,10 @@ public sealed class TestDatabase : IDisposable
                 Quantidade     DECIMAL(18,6)  NOT NULL,
                 PrecoUnitario  DECIMAL(18,6)  NOT NULL DEFAULT 0,
                 ValorMercado   AS (Quantidade * PrecoUnitario),
+                ValorPersistido AS (Quantidade * PrecoUnitario) PERSISTED,
                 DataRef        DATE           NOT NULL,
+                Observacao     NVARCHAR(250)  NULL,
+                Moeda          CHAR(3)        NULL,
                 CONSTRAINT PK_Posicao PRIMARY KEY (PosicaoId),
                 CONSTRAINT CK_Posicao_Quantidade CHECK (Quantidade >= 0),
                 CONSTRAINT FK_Posicao_Instrumento
@@ -108,7 +111,28 @@ public sealed class TestDatabase : IDisposable
             );
             """);
 
+        // A second extended property on a column, so the reader is exercised against a database that
+        // keeps its own conventions there and not only MS_Description.
+        Execute(conn, """
+            EXEC sp_addextendedproperty
+                'PRA_Format', N'{0:N4}',
+                'SCHEMA', 'dbo', 'TABLE', 'Instrumento', 'COLUMN', 'PrecoCusto';
+            """);
+
+        Execute(conn, """
+            EXEC sp_addextendedproperty
+                'MS_Description', N'Preço de custo unitário',
+                'SCHEMA', 'dbo', 'TABLE', 'Instrumento', 'COLUMN', 'PrecoCusto';
+            """);
+
         Execute(conn, "CREATE INDEX IX_Posicao_DataRef ON financeiro.Posicao (DataRef DESC);");
+
+        // Composite key whose column order is not alphabetical, so a regression in the key ordering
+        // of the index listing shows up instead of passing by luck.
+        Execute(conn, """
+            CREATE INDEX IX_Posicao_Composto
+                ON financeiro.Posicao (DataRef, InstrumentoId, PosicaoId);
+            """);
         Execute(conn, "CREATE INDEX IX_Posicao_Instrumento ON financeiro.Posicao (InstrumentoId);");
         Execute(conn, "CREATE INDEX IX_Posicao_Instrumento_Duplicado ON financeiro.Posicao (InstrumentoId);");
 
