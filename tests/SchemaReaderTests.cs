@@ -10,7 +10,7 @@ using Microsoft.Data.SqlClient;
 namespace Elekto.Mcp.Sql.Tests;
 
 /// <summary>
-/// Integration tests for SchemaReader against LocalDB.
+/// Integration tests for SchemaReader against the SQL Server found by <see cref="TestServer"/>.
 /// The ElektoMcpTest database is created once per fixture and dropped on teardown.
 /// </summary>
 [TestFixture]
@@ -20,10 +20,10 @@ public class SchemaReaderTests
     private SchemaReader _reader = null!;
 
     [OneTimeSetUp]
-    public static void CreateDatabase() => _db = new TestDatabase();
+    public static async Task CreateDatabase() => _db = await TestDatabase.CreateAsync();
 
     [OneTimeTearDown]
-    public static void DropDatabase() => _db.Dispose();
+    public static void DropDatabase() => _db?.Dispose();
 
     [SetUp]
     public void CreateReader() => _reader = new SchemaReader(_db.ConnectionString, defaultTimeoutSeconds: 30);
@@ -967,7 +967,7 @@ public class SchemaReaderTests
         try
         {
             CreateCompareDatabase(tempDatabase);
-            var targetConn = $"Server={TestDatabase.InstanceName};Database={tempDatabase};Integrated Security=SSPI;TrustServerCertificate=True";
+            var targetConn = _db.ConnectionStringFor(tempDatabase);
             var targetReader = new SchemaReader(targetConn);
 
             var result = ParseObject(SchemaReader.CompareSchemas(_reader, targetReader, "financeiro", "financeiro"));
@@ -985,11 +985,11 @@ public class SchemaReaderTests
 
     private static void CreateCompareDatabase(string databaseName)
     {
-        using var master = new SqlConnection($"Server={TestDatabase.InstanceName};Database=master;Integrated Security=SSPI;TrustServerCertificate=True");
+        using var master = new SqlConnection(_db.ConnectionStringFor("master"));
         master.Open();
         Execute(master, $"CREATE DATABASE [{databaseName}];");
 
-        using var db = new SqlConnection($"Server={TestDatabase.InstanceName};Database={databaseName};Integrated Security=SSPI;TrustServerCertificate=True");
+        using var db = new SqlConnection(_db.ConnectionStringFor(databaseName));
         db.Open();
 
         Execute(db, "CREATE SCHEMA financeiro;");
@@ -1006,7 +1006,7 @@ public class SchemaReaderTests
 
     private static void DropDatabaseIfExists(string databaseName)
     {
-        using var conn = new SqlConnection($"Server={TestDatabase.InstanceName};Database=master;Integrated Security=SSPI;TrustServerCertificate=True");
+        using var conn = new SqlConnection(_db.ConnectionStringFor("master"));
         conn.Open();
 
         Execute(conn, $"""

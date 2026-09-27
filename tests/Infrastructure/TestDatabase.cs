@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Elekto Produtos Financeiros. Licensed under the GNU General Public License v3.0 (GPL-3.0).
+﻿// Copyright (c) 2026 Elekto Produtos Financeiros. Licensed under the GNU General Public License v3.0 (GPL-3.0).
 // This software is provided "as is", without warranty of any kind. Use at your own risk.
 // See the LICENSE file for the full license text.
 
@@ -7,25 +7,31 @@ using Microsoft.Data.SqlClient;
 namespace Elekto.Mcp.Sql.Tests.Infrastructure;
 
 /// <summary>
-/// Creates and destroys the ElektoMcpTest database in LocalDB.
+/// Creates and destroys the ElektoMcpTest database on the server found by <see cref="TestServer"/>.
 /// Used as OneTimeSetUp / OneTimeTearDown through the TestDatabase fixture.
 /// </summary>
 public sealed class TestDatabase : IDisposable
 {
-    public const string InstanceName  = @"(localdb)\MSSQLLocalDB";
     public const string DatabaseName  = "ElektoMcpTest";
 
-    public string ConnectionString { get; } =
-        $"Server={InstanceName};Database={DatabaseName};Integrated Security=SSPI;TrustServerCertificate=True";
+    public string ConnectionString { get; }
 
-    private readonly string _masterConn =
-        $"Server={InstanceName};Database=master;Integrated Security=SSPI;TrustServerCertificate=True";
+    private readonly string _masterConn;
 
-    public TestDatabase()
+    private TestDatabase(string masterConnectionString)
     {
+        _masterConn = masterConnectionString;
+        ConnectionString = ConnectionStringFor(DatabaseName);
         CreateDatabase();
         CreateSchema();
     }
+
+    public static async Task<TestDatabase> CreateAsync() =>
+        new(await TestServer.GetMasterConnectionStringAsync());
+
+    /// <summary>Connection string to another database on the same server (master included).</summary>
+    public string ConnectionStringFor(string database) =>
+        new SqlConnectionStringBuilder(_masterConn) { InitialCatalog = database }.ConnectionString;
 
     private void CreateDatabase()
     {

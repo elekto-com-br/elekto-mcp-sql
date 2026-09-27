@@ -382,6 +382,52 @@ dotnet publish -c Release -o C:\Tools\Elekto.Mcp.Sql
 Requires .NET 10 installed on the machine. The published directory is ~7 MB (NuGet dependencies).
 For internal use, this is preferred over self-contained (~81 MB).
 
+### Running the tests
+
+From the repository root:
+
+```bash
+dotnet test
+```
+
+The test project holds two kinds of tests:
+
+- **Unit tests** (such as `ConnectionConfigTests`) need nothing beyond the .NET SDK.
+- **Integration tests** (`SchemaReaderTests`) run against a real SQL Server. Each run creates a
+  database named `ElektoMcpTest`, fills it with a small seed schema, and drops it at the end.
+
+The integration tests look for a SQL Server in this order and use the first one found:
+
+1. **The `ELEKTO_MCP_SQL_CONN_TEST` environment variable.** If set, it must hold a connection
+   string to a server the tests may use. The database named in it, if any, is ignored. The login
+   needs permission to create and drop databases. If this server cannot be reached, the tests fail
+   right away instead of trying the next options, since an explicit choice that does not work is
+   an error worth seeing.
+2. **LocalDB**, only on Windows and only if the `(localdb)\MSSQLLocalDB` instance answers.
+3. **A disposable container** started through [Testcontainers](https://dotnet.testcontainers.org/)
+   from the `mcr.microsoft.com/mssql/server:2022-latest` image. This needs Docker (rootless Docker
+   works too). The container is started only when an integration test needs it, and it is removed
+   when the run ends. The first run also downloads the image, which takes a while.
+
+If none of these is available, the integration tests fail with a message listing what was tried
+and why each option did not work. The test output states which server was used.
+
+Example, pointing the tests at an existing server:
+
+```bash
+export ELEKTO_MCP_SQL_CONN_TEST="Server=localhost,1433;User Id=sa;Password=<password>;TrustServerCertificate=True"
+dotnet test
+```
+
+Do not point `ELEKTO_MCP_SQL_CONN_TEST` at a server where a database called `ElektoMcpTest`
+matters to anyone: the tests drop and recreate it.
+
+To run only the unit tests, with no SQL Server at all:
+
+```bash
+dotnet test --filter "FullyQualifiedName!~SchemaReaderTests"
+```
+
 ## Limits and Security
 
 - Read-only: only SELECT on tables and views. DML and procedure/function execution are not supported.

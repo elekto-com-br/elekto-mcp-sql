@@ -8,8 +8,8 @@ on:
 jobs:
   publish:
     name: Pack & Publish
-    # LocalDB (required by integration tests) is only available on Windows runners
-    runs-on: windows-latest
+    # Integration tests get a SQL Server from a Testcontainers container (Docker is preinstalled on Ubuntu runners)
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -44,9 +44,6 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.x
-
-      - name: Start LocalDB
-        run: sqllocaldb start MSSQLLocalDB
 
       - name: Restore
         shell: bash
