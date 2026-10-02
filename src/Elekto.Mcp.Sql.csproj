@@ -22,7 +22,7 @@
 
     <!-- Package description and discoverability -->
     <Description>
-      Read-only MCP server for SQL Server 2022+ introspection and querying.
+      Read-only MCP server for SQL Server 2017+ introspection and querying.
       Exposes schema metadata, DDL definitions, dependency graphs, index health diagnostics,
       data profiling and data queries via the Model Context Protocol (stdio transport),
       enabling AI assistants such as GitHub Copilot and Claude to understand your database
@@ -43,6 +43,9 @@
     <PackageIcon>elekto_logo_sq.300x300.png</PackageIcon>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Elekto.Mcp.Sql.Tests" />
+  </ItemGroup>
   <ItemGroup>
     <None Include="..\README.md" Pack="true" PackagePath="\" />
     <None Include="..\assets\elekto_logo_sq.300x300.png" Pack="true" PackagePath="\" />

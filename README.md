@@ -6,7 +6,7 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![CI](https://github.com/elekto-com-br/elekto-mcp-sql/actions/workflows/ci.yml/badge.svg)](https://github.com/elekto-com-br/elekto-mcp-sql/actions/workflows/ci.yml)
 
-Read-only MCP server for SQL Server 2022+ introspection and querying.
+Read-only MCP server for SQL Server 2017+ introspection and querying (tested on 2019 and 2022).
 Exposes schema metadata, object definitions, and data queries via the MCP protocol (stdio),
 allowing GitHub Copilot (and other MCP clients, like Claude, etc.) to understand your database structure
 without storing credentials in the repository.
@@ -54,7 +54,8 @@ with no warranties of any kind.
 | Tool                       | Description                                                  |
 | -------------------------- | ------------------------------------------------------------ |
 | `list_databases`           | Databases registered in the configuration                    |
-| `get_database_overview`    | High-level database summary (counts, size, connection metadata) |
+| `get_database_overview`    | High-level database summary (counts, size, connection metadata), and whether the login sees everything |
+| `check_permissions`        | What the connected login can and cannot see, the GRANT that completes it, and whether it could write |
 | `get_schema_summary`       | Aggregated metrics by schema (objects, rows, size)           |
 | `list_schemas`             | Schemas in a database (excluding system schemas)             |
 | `list_tables`              | User tables with schema, dates, approximate rows and estimated size; filterable by schema and name pattern |
@@ -90,6 +91,22 @@ but anything that parses the output will notice:
 | New: `find_columns`; `list_tables` and `list_views` take a `name_pattern` | Nothing; both are additive |
 
 Everything else — every other tool, every other field — is unchanged.
+
+## What changed in 2.1.0
+
+Nothing changes shape: arrays are still arrays and objects keep every field they had. A few
+values now say "unknown" instead of passing a guess for a fact, which is worth knowing if you
+parse them:
+
+| Change | Why |
+| ------ | --- |
+| New: `check_permissions` | Says what the login is missing, per tool, with the GRANT that fixes it |
+| `get_database_overview`, `get_table_usage`, `get_index_health` and `generate_dependency_dot` gained a `visibility` block | So a result the login could only partly see says so |
+| `list_procedures` / `list_functions` rows gained `definition_visible`; `line_count` and `join_count` are `null` when it is false | A hidden definition used to read as a body of 0 lines |
+| `referenced_object_count` is `null`, and `get_table_usage`'s `sql_module_usage` is `null`, when the login cannot read `sys.sql_expression_dependencies` | Both used to fail the whole call with error 229 |
+| `get_index_health` returns the duplicates and `null` for the DMV sections when the login lacks the server permission | It used to fail outright, losing the part that needs no permission |
+| `get_*_definition` of a name the login cannot see returns `ok: false` instead of `[]` | `[]` read the same for "does not exist" and "hidden from you" |
+| SQL errors carry their number, and the hint tells permission, missing name and syntax apart | One generic hint covered all three |
 
 ## Reading the Results
 
@@ -156,6 +173,34 @@ a generic line. Failures are therefore returned as a normal result carrying `ok:
 The trade-off is deliberate: the host no longer marks the call as an error, but the caller
 can read what went wrong and correct it. Successful results are unchanged and never carry
 an `ok` field.
+
+### What the login cannot see is left out without an error
+
+SQL Server shows a login only the objects it holds some permission on (*metadata visibility*),
+and it filters the rest out silently. A login in `db_datareader` alone sees every table but
+not one procedure it cannot execute, and sees views without their text. Every catalog query
+then returns a normal, well-formed, **short** answer — "this database has 6 procedures" when
+it has 672.
+
+Since the data cannot reveal that, the server checks the permissions that decide it and says
+so. `get_database_overview`, the tool to call first, carries:
+
+```json
+"visibility": {
+  "complete": false,
+  "notes": [
+    "The login lacks VIEW DEFINITION on the database. SQL Server then leaves out, without any error, every procedure, function and view the login holds no permission on, so their listings and counts may be short.",
+    "756 of the 756 visible views, procedures and functions have their definition hidden from this login."
+  ],
+  "hint": "Call check_permissions for what this login is missing and the GRANT statements that fix it."
+}
+```
+
+`check_permissions` then reports, for each group of tools, `complete`, `partial` or
+`unavailable`, the permission that is missing and the GRANT that adds it, in the syntax of the
+server's version. It also reports `write_access`: whether a role, a database permission or a
+schema- or object-level GRANT lets the login change anything, so that an account meant to be
+read-only can be checked rather than assumed.
 
 ## Installation
 
@@ -412,6 +457,11 @@ The integration tests look for a SQL Server in this order and use the first one 
 If none of these is available, the integration tests fail with a message listing what was tried
 and why each option did not work. The test output states which server was used.
 
+Some of the integration tests run as restricted logins, to check what the tools say when SQL Server
+hides objects. The fixture creates those logins (`ElektoMcpTest_*`) and drops them at the end, which
+needs `ALTER ANY LOGIN` as well; a server that does not allow it reports those tests as skipped,
+with the reason.
+
 Example, pointing the tests at an existing server:
 
 ```bash
@@ -427,6 +477,38 @@ To run only the unit tests, with no SQL Server at all:
 ```bash
 dotnet test --filter "FullyQualifiedName!~SchemaReaderTests"
 ```
+
+## Recommended permissions
+
+Everything the tools read, with no permission to change anything:
+
+```sql
+USE [YourDatabase];
+CREATE USER [mcp_reader] FOR LOGIN [mcp_reader];  -- if the user does not exist yet
+ALTER ROLE db_datareader ADD MEMBER [mcp_reader];  -- tables and views; also covers sys.sql_expression_dependencies
+GRANT VIEW DEFINITION TO [mcp_reader];             -- procedures, functions, view text, complete dependencies
+
+USE master;
+GRANT VIEW SERVER STATE TO [mcp_reader];           -- get_index_health: unused and missing indexes
+```
+
+On SQL Server 2022 and later the last grant can be narrowed to the permission the index DMVs
+actually need:
+
+```sql
+USE master;
+GRANT VIEW SERVER PERFORMANCE STATE TO [mcp_reader];
+```
+
+| Permission | Without it |
+| ---------- | ---------- |
+| `db_datareader` (SELECT on the database) | Tables and views the login holds no grant on are left out; `query_table` fails on them. If the login is not in `db_datareader`, `sys.sql_expression_dependencies` also needs `GRANT SELECT ON sys.sql_expression_dependencies` |
+| `VIEW DEFINITION` on the database | Procedures and functions are left out, view and module text is hidden, dependencies are incomplete |
+| `VIEW SERVER STATE` (2022+: `VIEW SERVER PERFORMANCE STATE`) | `get_index_health` returns the duplicate indexes only |
+
+None of these lets the login change data or schema. Run `check_permissions` against the
+database to see which are missing — it prints the statements for that login and that
+server version.
 
 ## Limits and Security
 

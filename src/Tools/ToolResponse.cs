@@ -50,10 +50,8 @@ internal static class ToolResponse
         {
             return Failure(
                 toolName,
-                $"SQL Server rejected the query: {ex.Message}",
-                "The parameters were well-formed, so this came from the database itself: a name that "
-                + "does not exist, a permission, or a WHERE clause it could not parse. Check the "
-                + "object exists with list_tables or get_table_schema before querying it.",
+                $"SQL Server rejected the query (error {ex.Number}): {ex.Message}",
+                SqlErrorHint.For(ex),
                 null);
         }
         catch (InvalidOperationException ex)

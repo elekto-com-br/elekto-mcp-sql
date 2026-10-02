@@ -2,6 +2,7 @@
 // This software is provided "as is", without warranty of any kind. Use at your own risk.
 // See the LICENSE file for the full license text.
 
+using Elekto.Mcp.Sql.Data;
 using Microsoft.Data.SqlClient;
 
 namespace Elekto.Mcp.Sql.Tests.Infrastructure;
@@ -14,7 +15,30 @@ public sealed class TestDatabase : IDisposable
 {
     public const string DatabaseName  = "ElektoMcpTest";
 
+    /// <summary>In db_datareader and nothing else: sees every table, no procedure, no definition.</summary>
+    public const string ReaderLogin = "ElektoMcpTest_reader";
+
+    /// <summary>db_datareader plus the permissions the README recommends, short of the server one.</summary>
+    public const string ViewerLogin = "ElektoMcpTest_viewer";
+
+    /// <summary>db_datareader plus INSERT on one table: "read-only" by role, not in fact.</summary>
+    public const string InsertLogin = "ElektoMcpTest_insert";
+
+    /// <summary>
+    /// Outside db_datareader, with SELECT on one table and EXECUTE on one procedure, as an application
+    /// role tends to be: cannot even read sys.sql_expression_dependencies.
+    /// </summary>
+    public const string NarrowLogin = "ElektoMcpTest_narrow";
+
+    private static readonly string[] RestrictedLogins = [ReaderLogin, ViewerLogin, InsertLogin, NarrowLogin];
+
     public string ConnectionString { get; }
+
+    /// <summary>
+    /// Why the restricted logins could not be created, or null when they were. Creating a login needs
+    /// ALTER ANY LOGIN, which a server given through the environment variable may not grant.
+    /// </summary>
+    public string? RestrictedLoginsUnavailable { get; private set; }
 
     private readonly string _masterConn;
 
@@ -24,6 +48,7 @@ public sealed class TestDatabase : IDisposable
         ConnectionString = ConnectionStringFor(DatabaseName);
         CreateDatabase();
         CreateSchema();
+        CreateRestrictedLogins();
     }
 
     public static async Task<TestDatabase> CreateAsync() =>
@@ -255,6 +280,63 @@ public sealed class TestDatabase : IDisposable
             """);
     }
 
+    private void CreateRestrictedLogins()
+    {
+        try
+        {
+            using (var master = new SqlConnection(_masterConn))
+            {
+                master.Open();
+                DropRestrictedLogins(master);
+                foreach (var login in RestrictedLogins)
+                    Execute(master, $"CREATE LOGIN [{login}] WITH PASSWORD = '{Guid.NewGuid():N}Aa1!', CHECK_POLICY = OFF;");
+            }
+
+            using var conn = new SqlConnection(ConnectionString);
+            conn.Open();
+            foreach (var login in RestrictedLogins)
+            {
+                Execute(conn, $"CREATE USER [{login}] FOR LOGIN [{login}];");
+                if (login != NarrowLogin) Execute(conn, $"ALTER ROLE db_datareader ADD MEMBER [{login}];");
+            }
+
+            Execute(conn, $"GRANT VIEW DEFINITION TO [{ViewerLogin}];");
+            Execute(conn, $"GRANT SELECT ON sys.sql_expression_dependencies TO [{ViewerLogin}];");
+            Execute(conn, $"GRANT INSERT ON dbo.Instrumento TO [{InsertLogin}];");
+            Execute(conn, $"GRANT SELECT ON dbo.Instrumento TO [{NarrowLogin}];");
+            Execute(conn, $"GRANT EXECUTE ON dbo.sp_ObterInstrumento TO [{NarrowLogin}];");
+        }
+        catch (SqlException ex)
+        {
+            RestrictedLoginsUnavailable = $"Could not create the restricted test logins: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// A reader whose every query runs as <paramref name="login"/>, through EXECUTE AS on a connection
+    /// opened by the test server's own login, so the restricted login's password is never needed.
+    /// Pooling is off so that each connection, and its impersonation, ends when the reader closes it.
+    /// </summary>
+    public SchemaReader ReaderAs(string login)
+    {
+        if (RestrictedLoginsUnavailable is not null) Assert.Ignore(RestrictedLoginsUnavailable);
+
+        var connectionString = new SqlConnectionStringBuilder(ConnectionString) { Pooling = false }.ConnectionString;
+        return new SchemaReader(() =>
+        {
+            var conn = new SqlConnection(connectionString);
+            conn.Open();
+            Execute(conn, $"EXECUTE AS LOGIN = '{login}';");
+            return conn;
+        });
+    }
+
+    private static void DropRestrictedLogins(SqlConnection master)
+    {
+        foreach (var login in RestrictedLogins)
+            Execute(master, $"IF SUSER_ID('{login}') IS NOT NULL DROP LOGIN [{login}];");
+    }
+
     private static void Execute(SqlConnection conn, string sql)
     {
         using var cmd = conn.CreateCommand();
@@ -273,5 +355,7 @@ public sealed class TestDatabase : IDisposable
                 DROP DATABASE [{DatabaseName}];
             END
             """);
+
+        if (RestrictedLoginsUnavailable is null) DropRestrictedLogins(conn);
     }
 }

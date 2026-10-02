@@ -12,12 +12,12 @@ using Microsoft.Data.SqlClient;
 namespace Elekto.Mcp.Sql.Data;
 
 /// <summary>
-/// Encapsulates all SQL Server 2022+ queries.
+/// Encapsulates all SQL Server 2017+ queries.
 /// Uses sys.* views instead of INFORMATION_SCHEMA for richer and more precise metadata.
 /// </summary>
-public sealed class SchemaReader
+public sealed partial class SchemaReader
 {
-    private readonly string _connectionString;
+    private readonly Func<SqlConnection> _openConnection;
     private readonly int _defaultTimeoutSeconds;
 
     private static readonly Regex IdentifierPattern =
@@ -29,17 +29,28 @@ public sealed class SchemaReader
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     public SchemaReader(string connectionString, int defaultTimeoutSeconds = 30)
+        : this(() => OpenNew(connectionString), defaultTimeoutSeconds)
     {
-        _connectionString = connectionString;
+    }
+
+    /// <summary>
+    /// Reads through connections the caller opens. Lets the tests run every query as a restricted
+    /// login (EXECUTE AS on the connection) without the server having to accept that login's password.
+    /// </summary>
+    internal SchemaReader(Func<SqlConnection> openConnection, int defaultTimeoutSeconds = 30)
+    {
+        _openConnection = openConnection;
         _defaultTimeoutSeconds = defaultTimeoutSeconds > 0 ? defaultTimeoutSeconds : 30;
     }
 
-    private SqlConnection OpenConnection()
+    private static SqlConnection OpenNew(string connectionString)
     {
-        var conn = new SqlConnection(_connectionString);
+        var conn = new SqlConnection(connectionString);
         conn.Open();
         return conn;
     }
+
+    private SqlConnection OpenConnection() => _openConnection();
 
     private SqlCommand CreateCommand(SqlConnection conn, string sql)
     {
@@ -94,12 +105,23 @@ public sealed class SchemaReader
                  FROM sys.database_files)                                                AS size_mb;
             """);
 
-        using var reader = cmd.ExecuteReader();
-        if (!reader.Read()) return "{}";
-
         var row = new Dictionary<string, object?>();
-        for (int i = 0; i < reader.FieldCount; i++)
-            row[reader.GetName(i)] = reader.IsDBNull(i) ? null : reader.GetValue(i);
+        using (var reader = cmd.ExecuteReader())
+        {
+            if (!reader.Read()) return "{}";
+
+            for (int i = 0; i < reader.FieldCount; i++)
+                row[reader.GetName(i)] = reader.IsDBNull(i) ? null : reader.GetValue(i);
+        }
+
+        // The counts above are of what the login can see, which is not always what exists. This is
+        // the tool callers are told to start with, so it is where a short view is first announced.
+        var probe = ProbeAccess(conn);
+        row["visibility"] = Visibility([
+            probe.TablesComplete ? null : NoTableVisibilityNote,
+            probe.ModulesComplete ? null : NoViewDefinitionNote,
+            DefinitionsHiddenNote(probe)
+        ]);
 
         return JsonSerializer.Serialize(row);
     }
@@ -150,7 +172,9 @@ public sealed class SchemaReader
             SELECT s.name AS schema_name,
                    p.name AS owner
             FROM sys.schemas s
-            JOIN sys.database_principals p ON s.principal_id = p.principal_id
+            -- LEFT, because a login without VIEW DEFINITION may not see the owner, and the schema
+            -- must not disappear with it.
+            LEFT JOIN sys.database_principals p ON s.principal_id = p.principal_id
             WHERE s.name NOT IN ('sys','guest','INFORMATION_SCHEMA',
                                  'db_owner','db_accessadmin','db_securityadmin',
                                  'db_ddladmin','db_backupoperator','db_datareader',
@@ -289,23 +313,44 @@ public sealed class SchemaReader
         return QueryToJson(cmd);
     }
 
+    /// <summary>
+    /// The complexity columns shared by the procedure and function listings. A module whose definition
+    /// the login cannot see gets NULL metrics and <c>definition_visible = 0</c>, not a line count of
+    /// zero that reads as an empty body. Without SELECT on sys.sql_expression_dependencies the
+    /// reference count is NULL too, instead of the whole listing failing on permission error 229.
+    /// </summary>
+    private static string ModuleMetricsSql(string objectAlias, bool readSqlDependencies)
+    {
+        var referenced = readSqlDependencies
+            ? $"""
+                (
+                    SELECT COUNT(DISTINCT sed.referenced_id)
+                    FROM sys.sql_expression_dependencies sed
+                    WHERE sed.referencing_id = {objectAlias}.object_id
+                      AND sed.referenced_id IS NOT NULL
+                )
+              """
+            : "CAST(NULL AS int)";
+
+        return $"""
+                CAST(CASE WHEN m.definition IS NULL THEN 0 ELSE 1 END AS bit) AS definition_visible,
+                LEN(m.definition) - LEN(REPLACE(m.definition, CHAR(10), '')) + 1 AS line_count,
+                (LEN(LOWER(m.definition)) - LEN(REPLACE(LOWER(m.definition), ' join ', ''))) / 6 AS join_count,
+                {referenced} AS referenced_object_count
+            """;
+    }
+
     public string ListProcedures(string? schema)
     {
         using var conn = OpenConnection();
-        using var cmd = CreateCommand(conn, """
+        var probe = ProbeAccess(conn);
+        using var cmd = CreateCommand(conn, $"""
             SELECT
                 s.name AS schema_name,
                 p.name AS procedure_name,
                 p.create_date,
                 p.modify_date,
-                COALESCE(LEN(m.definition) - LEN(REPLACE(m.definition, CHAR(10), '')) + 1, 0) AS line_count,
-                COALESCE((LEN(LOWER(m.definition)) - LEN(REPLACE(LOWER(m.definition), ' join ', ''))) / 6, 0) AS join_count,
-                (
-                    SELECT COUNT(DISTINCT sed.referenced_id)
-                    FROM sys.sql_expression_dependencies sed
-                    WHERE sed.referencing_id = p.object_id
-                      AND sed.referenced_id IS NOT NULL
-                ) AS referenced_object_count
+                {ModuleMetricsSql("p", probe.ReadSqlDependencies)}
             FROM sys.procedures p
             JOIN sys.schemas s ON p.schema_id = s.schema_id
             LEFT JOIN sys.sql_modules m ON m.object_id = p.object_id
@@ -319,7 +364,8 @@ public sealed class SchemaReader
     public string ListFunctions(string? schema)
     {
         using var conn = OpenConnection();
-        using var cmd = CreateCommand(conn, """
+        var probe = ProbeAccess(conn);
+        using var cmd = CreateCommand(conn, $"""
             SELECT
                 s.name AS schema_name,
                 o.name AS function_name,
@@ -330,14 +376,7 @@ public sealed class SchemaReader
                 END AS function_type,
                 o.create_date,
                 o.modify_date,
-                COALESCE(LEN(m.definition) - LEN(REPLACE(m.definition, CHAR(10), '')) + 1, 0) AS line_count,
-                COALESCE((LEN(LOWER(m.definition)) - LEN(REPLACE(LOWER(m.definition), ' join ', ''))) / 6, 0) AS join_count,
-                (
-                    SELECT COUNT(DISTINCT sed.referenced_id)
-                    FROM sys.sql_expression_dependencies sed
-                    WHERE sed.referencing_id = o.object_id
-                      AND sed.referenced_id IS NOT NULL
-                ) AS referenced_object_count
+                {ModuleMetricsSql("o", probe.ReadSqlDependencies)}
             FROM sys.objects o
             JOIN sys.schemas s ON o.schema_id = s.schema_id
             LEFT JOIN sys.sql_modules m ON m.object_id = o.object_id
@@ -619,14 +658,29 @@ public sealed class SchemaReader
 
     #region Object Definitions
 
-    private string GetObjectDefinition(string objectName, string? schema, string objectTypeFilter)
+    /// <summary>
+    /// The definition rows of the modules called <paramref name="objectName"/> of the given types.
+    /// </summary>
+    /// <remarks>
+    /// No row used to come back as <c>[]</c>, which reads the same whether the object does not exist
+    /// or the login simply cannot see it — SQL Server hides objects without VIEW DEFINITION and says
+    /// nothing. It is now a failure that tells the two apart as far as the permissions allow. A row
+    /// whose definition is hidden is still returned, with <c>definition_visible = false</c>.
+    /// </remarks>
+    private string GetObjectDefinition(string objectName, string? schema, string[] types, string kind, string listingTool)
     {
+        // The type codes are this class's own constants, never caller input, so they are written into
+        // the statement. Splitting a parameter instead (STRING_SPLIT) yields the database collation,
+        // which conflicts with sys.objects.type wherever the two differ.
+        var typeList = string.Join(", ", types.Select(t => $"'{t}'"));
+
         using var conn = OpenConnection();
-        using var cmd = CreateCommand(conn, """
+        using var cmd = CreateCommand(conn, $"""
             SELECT s.name        AS schema_name,
                    o.name        AS object_name,
                    o.type_desc   AS object_type,
                    m.definition  AS definition,
+                   CAST(CASE WHEN m.definition IS NULL THEN 0 ELSE 1 END AS bit) AS definition_visible,
                    o.create_date,
                    o.modify_date
             FROM sys.sql_modules m
@@ -634,17 +688,35 @@ public sealed class SchemaReader
             JOIN sys.schemas s ON o.schema_id = s.schema_id
             WHERE o.name = @name
               AND (@schema IS NULL OR s.name = @schema)
-              AND (@typeFilter IS NULL OR o.type = @typeFilter);
+              AND o.type IN ({typeList});
             """);
         cmd.Parameters.AddWithValue("@name", objectName);
         cmd.Parameters.AddWithValue("@schema", (object?)schema ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@typeFilter", (object?)objectTypeFilter ?? DBNull.Value);
-        return QueryToJson(cmd);
+        var rows = QueryToRows(cmd);
+
+        if (rows.Count == 0)
+        {
+            var where = schema is null ? "" : $" in schema '{schema}'";
+            var probe = ProbeAccess(conn);
+            throw new ToolInputException(
+                $"No {kind} named '{objectName}'{where} is visible to this login.",
+                probe.ViewDefinition
+                    ? $"The login can see every {kind}, so this one does not exist. {listingTool} lists the ones that do."
+                    : $"Either it does not exist, or the login lacks VIEW DEFINITION and SQL Server hides it "
+                      + $"without an error. {listingTool} lists what the login can see; {CheckPermissionsHint}",
+                schema is null ? new { schema = "dbo" } : null);
+        }
+
+        foreach (var row in rows.Where(r => r["definition"] is null))
+            row["definition_hint"] = "The login can see this object but not its text, which needs VIEW DEFINITION. "
+                                     + CheckPermissionsHint;
+
+        return JsonSerializer.Serialize(rows);
     }
 
     public string GetViewDefinition(string view, string? schema)
     {
-        var definition = GetObjectDefinition(view, schema, "V");
+        var definition = GetObjectDefinition(view, schema, ["V"], "view", "list_views");
 
         using var conn = OpenConnection();
 
@@ -660,38 +732,45 @@ public sealed class SchemaReader
     }
 
     public string GetProcedureDefinition(string procedure, string? schema)
-        => GetObjectDefinition(procedure, schema, "P");
+        => GetObjectDefinition(procedure, schema, ["P"], "procedure", "list_procedures");
 
     public string GetFunctionDefinition(string function, string? schema)
-    {
-        using var conn = OpenConnection();
-        using var cmd = CreateCommand(conn, """
-            SELECT s.name        AS schema_name,
-                   o.name        AS object_name,
-                   o.type_desc   AS object_type,
-                   m.definition  AS definition,
-                   o.create_date,
-                   o.modify_date
-            FROM sys.sql_modules m
-            JOIN sys.objects o ON m.object_id = o.object_id
-            JOIN sys.schemas s ON o.schema_id = s.schema_id
-            WHERE o.name = @name
-              AND (@schema IS NULL OR s.name = @schema)
-              AND o.type IN ('FN','IF','TF');
-            """);
-        cmd.Parameters.AddWithValue("@name", function);
-        cmd.Parameters.AddWithValue("@schema", (object?)schema ?? DBNull.Value);
-        return QueryToJson(cmd);
-    }
+        => GetObjectDefinition(function, schema, ["FN", "IF", "TF"], "function", "list_functions");
 
     #endregion
 
     #region Advanced exploration
 
-    public string GetDependencyGraph(string? schema)
+    /// <summary>
+    /// Dependency edges: foreign keys between tables and, when the login may read
+    /// sys.sql_expression_dependencies, references among views, procedures and functions.
+    /// </summary>
+    private static string DependencyEdgesSql(bool includeSqlExpressions)
     {
-        using var conn = OpenConnection();
-        using var cmd = CreateCommand(conn, """
+        var sqlExpressions = includeSqlExpressions
+            ? """
+
+                UNION ALL
+
+                SELECT
+                    'SQL_EXPRESSION' AS dependency_kind,
+                    s1.name AS from_schema,
+                    o1.name AS from_object,
+                    o1.type_desc AS from_type,
+                    s2.name AS to_schema,
+                    o2.name AS to_object,
+                    o2.type_desc AS to_type
+                FROM sys.sql_expression_dependencies d
+                JOIN sys.objects o1 ON o1.object_id = d.referencing_id
+                JOIN sys.schemas s1 ON s1.schema_id = o1.schema_id
+                LEFT JOIN sys.objects o2 ON o2.object_id = d.referenced_id
+                LEFT JOIN sys.schemas s2 ON s2.schema_id = o2.schema_id
+                WHERE d.referenced_id IS NOT NULL
+                  AND (@schema IS NULL OR s1.name = @schema OR s2.name = @schema)
+              """
+            : "";
+
+        return $"""
             SELECT
                 dep.dependency_kind,
                 dep.from_schema,
@@ -714,28 +793,28 @@ public sealed class SchemaReader
                 JOIN sys.schemas sf ON tf.schema_id = sf.schema_id
                 JOIN sys.tables tt ON fk.referenced_object_id = tt.object_id
                 JOIN sys.schemas st ON tt.schema_id = st.schema_id
-                WHERE (@schema IS NULL OR sf.name = @schema OR st.name = @schema)
-
-                UNION ALL
-
-                SELECT
-                    'SQL_EXPRESSION' AS dependency_kind,
-                    s1.name AS from_schema,
-                    o1.name AS from_object,
-                    o1.type_desc AS from_type,
-                    s2.name AS to_schema,
-                    o2.name AS to_object,
-                    o2.type_desc AS to_type
-                FROM sys.sql_expression_dependencies d
-                JOIN sys.objects o1 ON o1.object_id = d.referencing_id
-                JOIN sys.schemas s1 ON s1.schema_id = o1.schema_id
-                LEFT JOIN sys.objects o2 ON o2.object_id = d.referenced_id
-                LEFT JOIN sys.schemas s2 ON s2.schema_id = o2.schema_id
-                WHERE d.referenced_id IS NOT NULL
-                  AND (@schema IS NULL OR s1.name = @schema OR s2.name = @schema)
+                WHERE (@schema IS NULL OR sf.name = @schema OR st.name = @schema){sqlExpressions}
             ) dep
             ORDER BY dep.from_schema, dep.from_object, dep.to_schema, dep.to_object;
-            """);
+            """;
+    }
+
+    public string GetDependencyGraph(string? schema)
+    {
+        using var conn = OpenConnection();
+        var probe = ProbeAccess(conn);
+
+        // The result is a bare array, which has nowhere to say that half of it is missing, so a
+        // login that cannot read the module references gets a failure that says so rather than
+        // the foreign keys alone passed off as the whole graph.
+        if (!probe.ReadSqlDependencies)
+            throw new ToolInputException(
+                "get_dependency_graph needs SELECT on sys.sql_expression_dependencies, which this login lacks.",
+                "generate_dependency_dot returns the foreign-key edges it can read and says what is missing. "
+                + CheckPermissionsHint,
+                null);
+
+        using var cmd = CreateCommand(conn, DependencyEdgesSql(includeSqlExpressions: true));
         cmd.Parameters.AddWithValue("@schema", (object?)schema ?? DBNull.Value);
         return QueryToJson(cmd);
     }
@@ -764,6 +843,20 @@ public sealed class SchemaReader
         cmdFk.Parameters.AddWithValue("@table", table);
         var fkUsage = QueryToJson(cmdFk);
 
+        // Null rather than an empty list when the login cannot read the references at all: "no
+        // module uses this table" and "could not look" must not read the same.
+        var probe = ProbeAccess(conn);
+        if (!probe.ReadSqlDependencies)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                table = new { schema = effectiveSchema, name = table },
+                foreign_key_usage = JsonDocument.Parse(fkUsage).RootElement,
+                sql_module_usage = (object?)null,
+                visibility = Visibility([SqlDependenciesNote(probe)])
+            });
+        }
+
         using var cmdSql = CreateCommand(conn, """
             SELECT
                 'SQL_REFERENCE' AS usage_type,
@@ -785,7 +878,8 @@ public sealed class SchemaReader
         {
             table = new { schema = effectiveSchema, name = table },
             foreign_key_usage = JsonDocument.Parse(fkUsage).RootElement,
-            sql_module_usage = JsonDocument.Parse(sqlUsage).RootElement
+            sql_module_usage = JsonDocument.Parse(sqlUsage).RootElement,
+            visibility = Visibility([SqlDependenciesNote(probe)])
         });
     }
 
@@ -910,6 +1004,7 @@ public sealed class SchemaReader
     public string GetIndexHealth(string? schema)
     {
         using var conn = OpenConnection();
+        var unavailable = new List<object>();
 
         using var duplicateCmd = CreateCommand(conn, """
             WITH idx AS (
@@ -976,7 +1071,7 @@ public sealed class SchemaReader
             ORDER BY s.name, t.name, i.name;
             """);
         unusedCmd.Parameters.AddWithValue("@schema", (object?)schema ?? DBNull.Value);
-        var unusedIndexes = QueryToJson(unusedCmd);
+        var unusedIndexes = TryDmvSection(unusedCmd, "unused_indexes", unavailable);
 
         using var missingCmd = CreateCommand(conn, """
             SELECT
@@ -997,66 +1092,48 @@ public sealed class SchemaReader
             ORDER BY (migs.avg_user_impact * (migs.user_seeks + migs.user_scans)) DESC;
             """);
         missingCmd.Parameters.AddWithValue("@schema", (object?)schema ?? DBNull.Value);
-        var missingIndexes = QueryToJson(missingCmd);
+        var missingIndexes = TryDmvSection(missingCmd, "missing_index_suggestions", unavailable);
+
+        var visibility = Visibility([unavailable.Count == 0 ? null : NoServerStateNote]);
+        if (unavailable.Count > 0) visibility["unavailable"] = unavailable;
 
         return JsonSerializer.Serialize(new
         {
             duplicate_indexes = JsonDocument.Parse(duplicateIndexes).RootElement,
-            unused_indexes = JsonDocument.Parse(unusedIndexes).RootElement,
-            missing_index_suggestions = JsonDocument.Parse(missingIndexes).RootElement
+            unused_indexes = unusedIndexes,
+            missing_index_suggestions = missingIndexes,
+            visibility
         });
+    }
+
+    /// <summary>
+    /// Runs one of the sections of <see cref="GetIndexHealth"/> that read server-state DMVs. A login
+    /// without the permission used to fail the whole call, taking with it the duplicate-index section
+    /// that only reads the catalog; now the section comes back null and says why. Any SQL error is
+    /// caught, not only the permission ones: a restricted login has been seen to get 15562 here
+    /// rather than the 300 the documentation leads one to expect.
+    /// </summary>
+    private static List<Dictionary<string, object?>>? TryDmvSection(
+        SqlCommand cmd, string section, List<object> unavailable)
+    {
+        try
+        {
+            return QueryToRows(cmd);
+        }
+        catch (SqlException ex)
+        {
+            unavailable.Add(new { section, error_number = ex.Number, error = ex.Message });
+            return null;
+        }
     }
 
     public string GenerateDependencyDot(string? schema)
     {
         using var conn = OpenConnection();
+        var probe = ProbeAccess(conn);
 
         var edges = new List<DependencyEdge>();
-        using (var edgeCmd = CreateCommand(conn, """
-            SELECT
-                dep.dependency_kind,
-                dep.from_schema,
-                dep.from_object,
-                dep.from_type,
-                dep.to_schema,
-                dep.to_object,
-                dep.to_type
-            FROM (
-                SELECT
-                    'FOREIGN_KEY' AS dependency_kind,
-                    sf.name AS from_schema,
-                    tf.name AS from_object,
-                    'TABLE' AS from_type,
-                    st.name AS to_schema,
-                    tt.name AS to_object,
-                    'TABLE' AS to_type
-                FROM sys.foreign_keys fk
-                JOIN sys.tables tf ON fk.parent_object_id = tf.object_id
-                JOIN sys.schemas sf ON tf.schema_id = sf.schema_id
-                JOIN sys.tables tt ON fk.referenced_object_id = tt.object_id
-                JOIN sys.schemas st ON tt.schema_id = st.schema_id
-                WHERE (@schema IS NULL OR sf.name = @schema OR st.name = @schema)
-
-                UNION ALL
-
-                SELECT
-                    'SQL_EXPRESSION' AS dependency_kind,
-                    s1.name AS from_schema,
-                    o1.name AS from_object,
-                    o1.type_desc AS from_type,
-                    s2.name AS to_schema,
-                    o2.name AS to_object,
-                    o2.type_desc AS to_type
-                FROM sys.sql_expression_dependencies d
-                JOIN sys.objects o1 ON o1.object_id = d.referencing_id
-                JOIN sys.schemas s1 ON s1.schema_id = o1.schema_id
-                LEFT JOIN sys.objects o2 ON o2.object_id = d.referenced_id
-                LEFT JOIN sys.schemas s2 ON s2.schema_id = o2.schema_id
-                WHERE d.referenced_id IS NOT NULL
-                  AND (@schema IS NULL OR s1.name = @schema OR s2.name = @schema)
-            ) dep
-            ORDER BY dep.from_schema, dep.from_object, dep.to_schema, dep.to_object;
-            """))
+        using (var edgeCmd = CreateCommand(conn, DependencyEdgesSql(probe.ReadSqlDependencies)))
         {
             edgeCmd.Parameters.AddWithValue("@schema", (object?)schema ?? DBNull.Value);
             using var reader = edgeCmd.ExecuteReader();
@@ -1160,7 +1237,8 @@ public sealed class SchemaReader
                 from_node_id = BuildNodeId(e.FromSchema, e.FromObject),
                 to_node_id = BuildNodeId(e.ToSchema, e.ToObject)
             }),
-            dot = sb.ToString()
+            dot = sb.ToString(),
+            visibility = Visibility([SqlDependenciesNote(probe)])
         });
     }
 
@@ -1283,10 +1361,13 @@ public sealed class SchemaReader
         {
             // Naming the object matters: by this point the caller has supplied a table, a column
             // list, a WHERE and an ORDER BY, and the bare server message rarely says which was wrong.
+            var hint = SqlErrorHint.For(ex);
             throw new ToolInputException(
-                $"SQL Server rejected the query on [{effectiveSchema ?? "dbo"}].[{table}]: {ex.Message}",
-                "The 'where' and 'order_by' clauses are passed to SQL Server as written, so a typo in "
-                + "either surfaces here. Confirm the column names with get_table_schema.",
+                $"SQL Server rejected the query on [{effectiveSchema ?? "dbo"}].[{table}] (error {ex.Number}): {ex.Message}",
+                hint == SqlErrorHint.Unknown
+                    ? "The 'where' and 'order_by' clauses are passed to SQL Server as written, so a typo in "
+                      + "either surfaces here. Confirm the column names with get_table_schema."
+                    : hint,
                 null);
         }
 

@@ -72,11 +72,27 @@ public sealed class SqlTools
     [McpServerTool, Description(
         "Returns a summary overview of a database: real name, connected user, server machine, " +
         "instance name, table/view/procedure/function/schema counts and total allocated size in MB. " +
-        "Use this after list_databases to quickly understand a database before exploring its objects.")]
+        "Use this after list_databases to quickly understand a database before exploring its objects. " +
+        "The counts are of what the login can see; 'visibility.complete' is false when SQL Server is " +
+        "hiding objects from it, and the notes say what is missing.")]
     public string get_database_overview(
         [Description("Name of the database as registered in the configuration.")]
         string database)
         => ToolResponse.Guard(nameof(get_database_overview), () => GetReader(database).GetDatabaseOverview());
+
+    [McpServerTool, Description(
+        "Reports what the connected login can and cannot see in a database: who it is, its roles and " +
+        "effective permissions, the server version, and for each group of tools whether it sees " +
+        "everything ('complete'), only part ('partial') or nothing ('unavailable'), with the permission " +
+        "missing and the GRANT that adds it. Also says whether the login could write, so a supposedly " +
+        "read-only account can be checked. SQL Server leaves out objects a login has no permission on " +
+        "without any error, so call this when a listing looks short or empty, when a definition comes " +
+        "back hidden, when get_database_overview reports incomplete visibility, or when a tool fails " +
+        "with a permission error.")]
+    public string check_permissions(
+        [Description("Name of the database as registered in the configuration.")]
+        string database)
+        => ToolResponse.Guard(nameof(check_permissions), () => GetReader(database).CheckPermissions());
 
     [McpServerTool, Description(
         "Lists the available schemas in a SQL Server database, " +
@@ -163,7 +179,11 @@ public sealed class SqlTools
             () => GetReader(database).GetViewDefinition(view, Optional(schema)));
 
     [McpServerTool, Description(
-        "Lists all user stored procedures in a database, with basic complexity metrics.")]
+        "Lists the user stored procedures the login can see, with basic complexity metrics. " +
+        "definition_visible is false, and the metrics null, for a procedure whose text is hidden from " +
+        "the login; referenced_object_count is null when the login cannot read dependencies. " +
+        "Objects the login has no permission on are left out by SQL Server without an error; " +
+        "get_database_overview says whether that is happening and check_permissions says why.")]
     public string list_procedures(
         [Description("Name of the database as registered in the configuration.")]
         string database,
@@ -172,7 +192,8 @@ public sealed class SqlTools
         => ToolResponse.Guard(nameof(list_procedures), () => GetReader(database).ListProcedures(Optional(schema)));
 
     [McpServerTool, Description(
-        "Returns the definition text (CREATE PROCEDURE) of a stored procedure.")]
+        "Returns the definition text (CREATE PROCEDURE) of a stored procedure. A procedure the login " +
+        "can see but not read comes back with definition null and definition_visible false.")]
     public string get_procedure_definition(
         [Description("Name of the database as registered in the configuration.")]
         string database,
@@ -184,8 +205,10 @@ public sealed class SqlTools
             () => GetReader(database).GetProcedureDefinition(procedure, Optional(schema)));
 
     [McpServerTool, Description(
-        "Lists all user-defined functions (scalar, inline table-valued, " +
-        "multi-statement table-valued) in a database.")]
+        "Lists the user-defined functions (scalar, inline table-valued, multi-statement " +
+        "table-valued) the login can see, with the same metrics and flags as list_procedures. " +
+        "Objects the login has no permission on are left out by SQL Server without an error; " +
+        "get_database_overview says whether that is happening and check_permissions says why.")]
     public string list_functions(
         [Description("Name of the database as registered in the configuration.")]
         string database,
@@ -194,7 +217,8 @@ public sealed class SqlTools
         => ToolResponse.Guard(nameof(list_functions), () => GetReader(database).ListFunctions(Optional(schema)));
 
     [McpServerTool, Description(
-        "Returns the definition text (CREATE FUNCTION) of a user-defined function.")]
+        "Returns the definition text (CREATE FUNCTION) of a user-defined function. A function the " +
+        "login can see but not read comes back with definition null and definition_visible false.")]
     public string get_function_definition(
         [Description("Name of the database as registered in the configuration.")]
         string database,
@@ -263,7 +287,10 @@ public sealed class SqlTools
 
     [McpServerTool, Description(
         "Returns dependency edges between database objects. Includes foreign key dependencies " +
-        "between tables and SQL-expression dependencies among views, procedures and functions.")]
+        "between tables and SQL-expression dependencies among views, procedures and functions. " +
+        "Fails, saying so, when the login cannot read sys.sql_expression_dependencies; without VIEW " +
+        "DEFINITION on the database the SQL-expression edges cover only modules the login can read, " +
+        "and generate_dependency_dot reports that in its 'visibility' block.")]
     public string get_dependency_graph(
         [Description("Name of the database as registered in the configuration.")]
         string database,
@@ -272,7 +299,9 @@ public sealed class SqlTools
         => ToolResponse.Guard(nameof(get_dependency_graph), () => GetReader(database).GetDependencyGraph(Optional(schema)));
 
     [McpServerTool, Description(
-        "Returns usages and references of a table across foreign keys and SQL modules (views, procedures, functions).")]
+        "Returns usages and references of a table across foreign keys and SQL modules (views, " +
+        "procedures, functions). sql_module_usage is null when the login cannot read dependencies, " +
+        "and 'visibility' says when the list may be incomplete.")]
     public string get_table_usage(
         [Description("Name of the database as registered in the configuration.")]
         string database,
@@ -301,7 +330,9 @@ public sealed class SqlTools
             () => GetReader(database).GetDataProfile(table, Optional(schema), Optional(columns), top_values));
 
     [McpServerTool, Description(
-        "Returns index-health diagnostics by schema: duplicate index candidates, unused indexes and missing-index suggestions.")]
+        "Returns index-health diagnostics by schema: duplicate index candidates, unused indexes and " +
+        "missing-index suggestions. The last two read server DMVs; without VIEW SERVER STATE they come " +
+        "back null and 'visibility.unavailable' says why, while the duplicates are still reported.")]
     public string get_index_health(
         [Description("Name of the database as registered in the configuration.")]
         string database,
@@ -328,7 +359,8 @@ public sealed class SqlTools
             Optional(target_schema)));
 
     [McpServerTool, Description(
-        "Generates a Graphviz DOT dependency graph and node metadata for database objects.")]
+        "Generates a Graphviz DOT dependency graph and node metadata for database objects. " +
+        "'visibility' says when module references are missing for lack of permission.")]
     public string generate_dependency_dot(
         [Description("Name of the database as registered in the configuration.")]
         string database,
