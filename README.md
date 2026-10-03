@@ -125,6 +125,17 @@ The process no longer exits with code 1 when the configuration is missing or unr
 that relied on that exit code should read a tool's answer instead. The README also gained setup
 instructions for [Claude Code](#claude-code-setup) and [Codex](#codex-setup).
 
+## What changed in 2.3.0
+
+No tool result changes shape; what changes is what the tools say about themselves, which is what an
+agent chooses them by:
+
+| Change | Why |
+| ------ | --- |
+| Every tool declares a title and the MCP annotations `readOnlyHint`, `idempotentHint`, `destructiveHint: false` and `openWorldHint: false` | Clients can show the tools as safe, and agents need not infer it from prose |
+| Every description says what the tool does, when to use it and which tool to use instead | So an agent picks the right one of 21 tools the first time |
+| The server always sends instructions on connecting, describing how the tools fit together | Previously it sent them only when no connection was configured |
+
 ## Reading the Results
 
 Three things about the shape of what comes back are worth knowing before you rely on it.
