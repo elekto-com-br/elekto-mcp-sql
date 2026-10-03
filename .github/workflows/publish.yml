@@ -97,34 +97,40 @@ jobs:
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
         shell: bash
 
-      # The registry proves the package is ours by reading 'mcp-name: <server name>' in its README
-      # through the nuget.org API, which serves it only once the new version has been validated and
-      # indexed, usually some minutes after the push.
-      - name: Wait for nuget.org to serve the package README
-        shell: bash
-        run: |
-          URL="https://api.nuget.org/v3-flatcontainer/elekto.mcp.sql/${VERSION,,}/readme"
-          MARKER="mcp-name: io.github.elekto-com-br/elekto-mcp-sql"
-
-          for i in $(seq 1 60); do
-            if curl -fsS "$URL" -o readme.md 2>/dev/null; then
-              grep -qF "$MARKER" readme.md && { echo "nuget.org serves the README of ${VERSION}, with the marker."; exit 0; }
-              echo "::error::nuget.org serves the README of ${VERSION}, but it lacks '${MARKER}'."
-              exit 1
-            fi
-            echo "Not served yet (attempt ${i} of 60); waiting 30 s."
-            sleep 30
-          done
-
-          echo "::error::nuget.org did not serve the README of ${VERSION} within 30 minutes. Re-run this job once the version shows on nuget.org."
-          exit 1
-
-      # The manifest published is the one inside the package, with the version already written in
-      - name: Take server.json from the published package
+      # nuget.org serves a new version only some minutes after the push, and not all at once: in the
+      # 2.2.1 release the README answered while the package itself was still 404 (and missing from
+      # the version list). So wait for the package, which is what users install, and only then check
+      # the README, which the registry reads through the nuget.org API to prove the package is ours.
+      - name: Wait for nuget.org to serve the package
         shell: bash
         run: |
           V=${VERSION,,}
-          curl -fsSL "https://api.nuget.org/v3-flatcontainer/elekto.mcp.sql/${V}/elekto.mcp.sql.${V}.nupkg" -o package.nupkg
+          BASE="https://api.nuget.org/v3-flatcontainer/elekto.mcp.sql/${V}"
+          MARKER="mcp-name: io.github.elekto-com-br/elekto-mcp-sql"
+
+          for i in $(seq 1 60); do
+            if curl -fsS "${BASE}/elekto.mcp.sql.${V}.nupkg" -o package.nupkg 2>/dev/null; then
+              echo "nuget.org serves the package ${VERSION}."
+              break
+            fi
+            if [ "$i" -eq 60 ]; then
+              echo "::error::nuget.org did not serve the package ${VERSION} within 30 minutes. Re-run this job once the version shows on nuget.org."
+              exit 1
+            fi
+            echo "Package not served yet (attempt ${i} of 60); waiting 30 s."
+            sleep 30
+          done
+
+          curl -fsS "${BASE}/readme" -o readme.md \
+            || { echo "::error::nuget.org serves the package ${VERSION} but not its README."; exit 1; }
+          grep -qF "$MARKER" readme.md \
+            || { echo "::error::The README of ${VERSION} on nuget.org lacks '${MARKER}'."; exit 1; }
+          echo "Its README carries '${MARKER}'."
+
+      # The manifest published is the one inside the package, with the version already written in
+      - name: Take server.json from the package
+        shell: bash
+        run: |
           unzip -p package.nupkg .mcp/server.json > server.json
           cat server.json
 
