@@ -236,7 +236,7 @@ Use it directly in `.mcp.json` — no path needed:
 > `appsettings.json`, `web.config` or `App.config`, the server picks it up automatically
 > and no further configuration is required.
 
-For Claude Code, see [Claude Code Setup](#claude-code-setup).
+For Claude Code and Codex, see [Claude Code Setup](#claude-code-setup) and [Codex Setup](#codex-setup).
 
 ### Without installing (dnx)
 
@@ -409,7 +409,8 @@ in a log; a server that answers can say what is missing. So it:
   with no restart.
 
 Once connections are loaded they are kept until the server restarts, so a change to a file
-already read needs a restart of the server (in Claude Code, `/mcp` and reconnect it).
+already read needs a restart of the server (in Claude Code, `/mcp` and reconnect it; in Codex,
+start Codex again).
 
 ## Claude Code Setup
 
@@ -472,6 +473,85 @@ and VS Code use `servers`:
   }
 }
 ```
+
+## Codex Setup
+
+[Codex](https://developers.openai.com/codex), OpenAI's coding agent (CLI, IDE extension and app),
+runs local MCP servers as well. Install the tool (see [Installation](#installation)) and register
+it with `codex mcp add`. Everything after `--` is the command Codex runs:
+
+```powershell
+dotnet tool install -g Elekto.Mcp.Sql
+codex mcp add sql -- elekto-mcp-sql
+```
+
+This adds the server to `~/.codex/config.toml` (`%USERPROFILE%\.codex\config.toml` on Windows),
+so it applies to every project:
+
+```toml
+[mcp_servers.sql]
+command = "elekto-mcp-sql"
+```
+
+Codex starts the server in the project directory, so the zero-config discovery works here too. In
+a project with no database the tools say how to add a connection (see
+[When no connection is configured](#when-no-connection-is-configured)).
+
+To register the server for one project only, put the same table in `.codex/config.toml` at the
+project root instead. Codex reads that file only in projects marked as trusted.
+
+`codex mcp list` and `codex mcp get sql` show the configuration. Unlike `claude mcp list`, they do
+not start the server, so a mistake in the command only shows when a Codex session starts.
+
+### Environment variables are not passed on
+
+Unlike Claude Code, Codex starts an MCP server with a short list of environment variables of its
+own (such as `HOME` and `PATH`), not with all of yours. A `%{VARIABLE}` in a connection string is
+therefore not found unless the variable is listed in `env_vars`, which forwards it from your
+environment:
+
+```toml
+[mcp_servers.sql]
+command = "elekto-mcp-sql"
+env_vars = ["CRM_DB_USER", "CRM_DB_PASS"]
+```
+
+Without it the server still starts, and every tool names the variable it could not find.
+
+`codex mcp add --env NAME=value` sets a value directly (the `env` table), but stores it in plain
+text in `config.toml`. Keep it for values that are not secret.
+
+### Other forms
+
+An explicit connections file, with no other source read:
+
+```toml
+[mcp_servers.sql]
+command = "elekto-mcp-sql"
+args = ["--connections", 'C:\Users\YourName\sql-connections.json']
+```
+
+A Windows path goes in **single** quotes, which TOML takes literally. Inside double quotes the
+`\U` of `C:\Users` is read as an escape sequence and Codex refuses the whole file; with double
+quotes every backslash must be doubled. `codex mcp add` writes single quotes by itself.
+
+Without installing the tool (needs the .NET 10 SDK, which brings `dnx`):
+
+```toml
+[mcp_servers.sql]
+command = "dnx"
+args = ["Elekto.Mcp.Sql", "--yes"]
+startup_timeout_sec = 30
+```
+
+The first start downloads the package, which can take longer than Codex waits for a server by
+default; `startup_timeout_sec` gives it more time. The installed tool starts in under a second and
+needs no such setting.
+
+If Codex runs inside WSL, it starts the server inside Linux, which cannot see the tool installed
+on Windows: install .NET and the tool in WSL as well. `Integrated Security` from Linux also needs
+Kerberos configured; a SQL Server login, with its password in a `%{VARIABLE}` listed in
+`env_vars`, is simpler there.
 
 ## Visual Studio 2026 Setup (.mcp.json)
 
