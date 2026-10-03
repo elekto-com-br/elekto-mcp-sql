@@ -236,6 +236,28 @@ Use it directly in `.mcp.json` — no path needed:
 > `appsettings.json`, `web.config` or `App.config`, the server picks it up automatically
 > and no further configuration is required.
 
+For Claude Code, see [Claude Code Setup](#claude-code-setup).
+
+### Without installing (dnx)
+
+The .NET 10 SDK (not the runtime alone) brings `dnx`, which downloads the package from NuGet
+and runs it, with no `dotnet tool install`:
+
+```json
+{
+  "servers": {
+    "sql": {
+      "type": "stdio",
+      "command": "dnx",
+      "args": ["Elekto.Mcp.Sql", "--yes"]
+    }
+  }
+}
+```
+
+The package is listed among the [MCP servers on nuget.org](https://www.nuget.org/packages?packagetype=mcpserver),
+whose **MCP Server** tab gives this configuration ready to paste into VS Code or Visual Studio.
+
 ### From a local publish (air-gapped / corporate environments)
 
 ```powershell
@@ -315,7 +337,8 @@ Both formats can be mixed in the same file. See [`sample-connections.json`](samp
 for a ready-to-use example.
 
 The recommended location for the local file is the project root (auto-discovered) or `~`
-(shared across all projects). Both paths are already in `.gitignore`.
+(shared across all projects). The file can hold credentials, so add `.elekto.mcp.sql.local.json`
+to your project's `.gitignore`, as this repository does.
 
 ### Options per database
 
@@ -340,14 +363,115 @@ Variables are resolved from the process environment at server startup.
 ```
 
 `%{CRM_DB_USER}` and `%{CRM_DB_PASS}` are replaced by the values of the corresponding
-OS environment variables. If a referenced variable does not exist, the server fails with
-an explicit error message.
+OS environment variables. If a referenced variable does not exist, no connection is loaded
+and every tool names the missing variable (see [When no connection is configured](#when-no-connection-is-configured)).
 
 ### Fallback: MCP_SQL_CONNECTIONS environment variable
 
 If `--connections` is not supplied, the server falls back to reading the
 `MCP_SQL_CONNECTIONS` environment variable, which must contain the JSON directly.
 This is provided for backward compatibility; the file-based approach is recommended.
+
+### When no connection is configured
+
+The server starts even when it finds no connection, or when the configuration cannot be read
+(invalid JSON, a `%{VARIABLE}` that is not set, a `--connections` file that does not exist).
+An MCP client shows a server that exits at startup only as "failed", with the reason buried
+in a log; a server that answers can say what is missing. So it:
+
+- states the problem in its server instructions, which the client hands to the model as soon
+  as it connects;
+- answers every tool with `ok: false`, what is wrong, the file to create, every place it looked
+  and an example of the content:
+
+```json
+{
+  "ok": false,
+  "tool": "list_databases",
+  "error": "No database connection is configured: none of the places this server reads holds a connection string.",
+  "hint": "Ask the user for a SQL Server connection string, preferably of a login that can only read, and save it in the file named in 'setup.file', with the shape shown in 'example'. ...",
+  "example": {
+    "MyDatabase": "Server=SQLSRV01;Database=MyDatabase;Integrated Security=True;TrustServerCertificate=True",
+    "Reporting": { "connection_string": "...User Id=%{REPORTING_USER};Password=%{REPORTING_PASS}...", "max_query_rows": 5000 }
+  },
+  "setup": {
+    "file": "C:\\Projects\\Risk\\.elekto.mcp.sql.local.json",
+    "file_for_every_project": "C:\\Users\\YourName\\.elekto.mcp.sql.local.json",
+    "searched": [ "C:\\Projects\\Risk\\.elekto.mcp.sql.local.json", "ConnectionStrings in C:\\Projects\\Risk\\appsettings.Development.json", "..." ],
+    "notes": [ "..." ],
+    "documentation": "https://github.com/elekto-com-br/elekto-mcp-sql#configuration"
+  }
+}
+```
+
+- looks again on every call while nothing is loaded, so a connections file created afterwards
+  (by you, or by the agent once you give it a connection string) is used by the next call,
+  with no restart.
+
+Once connections are loaded they are kept until the server restarts, so a change to a file
+already read needs a restart of the server (in Claude Code, `/mcp` and reconnect it).
+
+## Claude Code Setup
+
+Install the tool (see [Installation](#installation)) and register it with `claude mcp add`.
+Everything after `--` is the command Claude Code runs:
+
+```powershell
+dotnet tool install -g Elekto.Mcp.Sql
+claude mcp add sql -- elekto-mcp-sql
+```
+
+Claude Code starts the server in the project directory, so the zero-config discovery works as
+it does in Visual Studio: a `.elekto.mcp.sql.local.json`, or the `ConnectionStrings` of
+`appsettings.json` / `web.config`, in the project is found with no arguments.
+
+`-s` (`--scope`) chooses where the registration is kept:
+
+| Scope             | Command                                             | Applies to                                                   |
+| ----------------- | --------------------------------------------------- | ------------------------------------------------------------ |
+| `local` (default) | `claude mcp add sql -- elekto-mcp-sql`              | This project, for you only (kept in `~/.claude.json`)        |
+| `user`            | `claude mcp add -s user sql -- elekto-mcp-sql`      | Every project, for you                                       |
+| `project`         | `claude mcp add -s project sql -- elekto-mcp-sql`   | This project, for everyone who clones it (writes `.mcp.json`) |
+
+Registered with `-s user`, the server also starts in projects that have no database; there the
+tools say how to add a connection instead of failing (see
+[When no connection is configured](#when-no-connection-is-configured)).
+
+Other forms:
+
+```powershell
+# An explicit connections file; no other source is read
+claude mcp add sql -- elekto-mcp-sql --connections C:\Users\YourName\sql-connections.json
+
+# Without installing the tool (needs the .NET 10 SDK, which brings dnx)
+claude mcp add sql -- dnx Elekto.Mcp.Sql --yes
+```
+
+On Windows the installed command is a real executable (`%USERPROFILE%\.dotnet\tools\elekto-mcp-sql.exe`),
+so it needs no `cmd /c` wrapper, unlike servers started through `npx`.
+
+**Secrets.** `claude mcp add -e NAME=value` stores the value in plain text in `~/.claude.json`,
+or in `.mcp.json` with `-s project`, which is usually committed. For a password, write
+`%{NAME}` in the connection string and set `NAME` as an environment variable of your user
+account instead: Claude Code passes its environment on to the server.
+
+Check the registration with `claude mcp list` (the server should show `Connected`), or with
+`/mcp` inside Claude Code, which also lists the tools and reconnects the server.
+
+A `.mcp.json` written by hand for Claude Code uses the key `mcpServers`, where Visual Studio
+and VS Code use `servers`:
+
+```json
+{
+  "mcpServers": {
+    "sql": {
+      "type": "stdio",
+      "command": "elekto-mcp-sql",
+      "args": []
+    }
+  }
+}
+```
 
 ## Visual Studio 2026 Setup (.mcp.json)
 
@@ -426,6 +550,11 @@ dotnet publish -c Release -o C:\Tools\Elekto.Mcp.Sql
 
 Requires .NET 10 installed on the machine. The published directory is ~7 MB (NuGet dependencies).
 For internal use, this is preferred over self-contained (~81 MB).
+
+`dotnet pack` also packs [`src/.mcp/server.json`](src/.mcp/server.json), which tells nuget.org
+how to start the server. The file in the repository carries `$version$` where the version
+goes, and the pack writes the version being packed in its place, so there is nothing to
+update in it for a release.
 
 ### Running the tests
 
