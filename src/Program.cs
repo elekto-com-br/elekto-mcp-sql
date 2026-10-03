@@ -3,6 +3,7 @@
 // See the LICENSE file for the full license text.
 
 using Elekto.Mcp.Sql.Configuration;
+using Elekto.Mcp.Sql.Tools;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -38,9 +39,9 @@ builder.Services.AddSingleton(connections);
 builder.Services
     .AddMcpServer(options =>
     {
-        // Without connections, the client learns it on connecting, before the model calls any tool
-        if (problem is not null)
-            options.ServerInstructions = problem.Instructions;
+        // How the tools fit together; without connections the problem comes first, so the client
+        // learns it on connecting, before the model calls any tool
+        options.ServerInstructions = ServerInstructions.For(problem?.Instructions);
     })
     .WithStdioServerTransport()
     .WithToolsFromAssembly();
