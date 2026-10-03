@@ -10,9 +10,10 @@
     <RootNamespace>Elekto.Mcp.Sql</RootNamespace>
     <SelfContained>false</SelfContained>
 
-    <!-- NuGet global tool -->
+    <!-- NuGet global tool, listed on nuget.org as an MCP server (packagetype=mcpserver) -->
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>elekto-mcp-sql</ToolCommandName>
+    <PackageType>McpServer</PackageType>
 
     <!-- Package identity -->
     <PackageId>Elekto.Mcp.Sql</PackageId>
@@ -50,6 +51,51 @@
     <None Include="..\README.md" Pack="true" PackagePath="\" />
     <None Include="..\assets\elekto_logo_sq.300x300.png" Pack="true" PackagePath="\" />
   </ItemGroup>
+
+  <!--
+    .mcp/server.json tells nuget.org how to start the server (its "MCP Server" tab) and states the
+    package version twice. The file in the repository carries $version$ in both places, and this
+    target writes the packed copy with the version being packed, so the manifest cannot disagree
+    with the package it ships in.
+  -->
+  <PropertyGroup>
+    <BeforePack>$(BeforePack);GenerateMcpServerManifest</BeforePack>
+  </PropertyGroup>
+
+  <Target Name="GenerateMcpServerManifest">
+    <PropertyGroup>
+      <McpServerManifestOutput>$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'server.json'))</McpServerManifestOutput>
+    </PropertyGroup>
+
+    <WriteVersionedFile Source="$(MSBuildProjectDirectory)/.mcp/server.json"
+                        Destination="$(McpServerManifestOutput)"
+                        PackageVersion="$(Version)" />
+
+    <ItemGroup>
+      <None Include="$(McpServerManifestOutput)" Pack="true" PackagePath="/.mcp/" />
+    </ItemGroup>
+  </Target>
+
+  <!--
+    A task rather than WriteLinesToFile: on Linux and macOS that one takes its lines for paths and
+    turns every backslash into a slash, which would corrupt any JSON escape when CI packs.
+  -->
+  <UsingTask TaskName="WriteVersionedFile"
+             TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <Source ParameterType="System.String" Required="true" />
+      <Destination ParameterType="System.String" Required="true" />
+      <PackageVersion ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        var text = File.ReadAllText(Source).Replace("$version$", PackageVersion);
+        Directory.CreateDirectory(Path.GetDirectoryName(Destination));
+        File.WriteAllText(Destination, text);
+      ]]></Code>
+    </Task>
+  </UsingTask>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.2" />

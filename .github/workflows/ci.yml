@@ -28,3 +28,27 @@ jobs:
 
       - name: Test
         run: dotnet test --no-build -c Release --logger "console;verbosity=normal"
+
+      # Publishing packs only when a tag is pushed. Packing here as well finds a broken package,
+      # or a broken .mcp/server.json, on the pull request rather than at release time.
+      - name: Pack
+        run: dotnet pack src/Elekto.Mcp.Sql.csproj --no-build -c Release -o ./dist
+
+      - name: Verify the MCP server manifest in the package
+        shell: bash
+        run: |
+          VERSION=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' src/Elekto.Mcp.Sql.csproj | head -1)
+          NUPKG=$(find ./dist -name "*.nupkg" | head -1)
+
+          unzip -p "$NUPKG" Elekto.Mcp.Sql.nuspec | grep -q '<packageType name="McpServer" />' \
+            || { echo "::error::The package is not marked as an MCP server (PackageType McpServer)."; exit 1; }
+
+          unzip -p "$NUPKG" .mcp/server.json > server.json \
+            || { echo "::error::The package carries no .mcp/server.json."; exit 1; }
+
+          jq -e --arg v "$VERSION" \
+            '.version == $v and .packages[0].version == $v and .packages[0].identifier == "Elekto.Mcp.Sql"' \
+            server.json > /dev/null \
+            || { echo "::error::.mcp/server.json in the package does not declare Elekto.Mcp.Sql $VERSION."; cat server.json; exit 1; }
+
+          echo "Package ${VERSION} is an MCP server and its manifest agrees."
