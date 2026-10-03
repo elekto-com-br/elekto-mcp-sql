@@ -51,4 +51,9 @@ jobs:
             server.json > /dev/null \
             || { echo "::error::.mcp/server.json in the package does not declare Elekto.Mcp.Sql $VERSION."; cat server.json; exit 1; }
 
-          echo "Package ${VERSION} is an MCP server and its manifest agrees."
+          # The MCP Registry accepts the package only if its README names the server
+          NAME=$(jq -r .name server.json)
+          unzip -p "$NUPKG" README.md | grep -qF "mcp-name: ${NAME}" \
+            || { echo "::error::The packed README lacks 'mcp-name: ${NAME}', without which the MCP Registry refuses the package."; exit 1; }
+
+          echo "Package ${VERSION} is an MCP server, its manifest agrees, and its README names ${NAME}."

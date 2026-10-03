@@ -1,12 +1,12 @@
 {
-  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.elekto-com-br/elekto-mcp-sql",
+  "title": "Elekto SQL Server",
   "description": "Read-only SQL Server introspection and querying: schema, definitions, dependencies and data.",
   "version": "$version$",
   "packages": [
     {
       "registryType": "nuget",
-      "registryBaseUrl": "https://api.nuget.org",
       "identifier": "Elekto.Mcp.Sql",
       "version": "$version$",
       "transport": {

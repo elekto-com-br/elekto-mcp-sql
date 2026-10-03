@@ -81,3 +81,66 @@ jobs:
             --api-key ${{ secrets.NUGET_API_KEY }} \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
+
+  # Lists the version just pushed to NuGet in the MCP Registry (registry.modelcontextprotocol.io).
+  # A job of its own, so that only it holds the OIDC token, and so that it can be re-run alone.
+  mcp-registry:
+    name: Publish to the MCP Registry
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # GitHub OIDC login, which grants the io.github.elekto-com-br/* namespace
+      contents: read
+
+    steps:
+      - name: Extract version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+        shell: bash
+
+      # The registry proves the package is ours by reading 'mcp-name: <server name>' in its README
+      # through the nuget.org API, which serves it only once the new version has been validated and
+      # indexed, usually some minutes after the push.
+      - name: Wait for nuget.org to serve the package README
+        shell: bash
+        run: |
+          URL="https://api.nuget.org/v3-flatcontainer/elekto.mcp.sql/${VERSION,,}/readme"
+          MARKER="mcp-name: io.github.elekto-com-br/elekto-mcp-sql"
+
+          for i in $(seq 1 60); do
+            if curl -fsS "$URL" -o readme.md 2>/dev/null; then
+              grep -qF "$MARKER" readme.md && { echo "nuget.org serves the README of ${VERSION}, with the marker."; exit 0; }
+              echo "::error::nuget.org serves the README of ${VERSION}, but it lacks '${MARKER}'."
+              exit 1
+            fi
+            echo "Not served yet (attempt ${i} of 60); waiting 30 s."
+            sleep 30
+          done
+
+          echo "::error::nuget.org did not serve the README of ${VERSION} within 30 minutes. Re-run this job once the version shows on nuget.org."
+          exit 1
+
+      # The manifest published is the one inside the package, with the version already written in
+      - name: Take server.json from the published package
+        shell: bash
+        run: |
+          V=${VERSION,,}
+          curl -fsSL "https://api.nuget.org/v3-flatcontainer/elekto.mcp.sql/${V}/elekto.mcp.sql.${V}.nupkg" -o package.nupkg
+          unzip -p package.nupkg .mcp/server.json > server.json
+          cat server.json
+
+      - name: Install mcp-publisher
+        shell: bash
+        env:
+          MCP_PUBLISHER_VERSION: 1.8.1
+          MCP_PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
+        run: |
+          curl -fsSL -o mcp-publisher.tar.gz \
+            "https://github.com/modelcontextprotocol/registry/releases/download/v${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz"
+          echo "${MCP_PUBLISHER_SHA256}  mcp-publisher.tar.gz" | sha256sum --check
+          tar xzf mcp-publisher.tar.gz mcp-publisher
+
+      - name: Log in to the MCP Registry
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish to the MCP Registry
+        run: ./mcp-publisher publish server.json

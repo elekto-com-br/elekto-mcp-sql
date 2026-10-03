@@ -1,5 +1,7 @@
 # Elekto.Mcp.Sql
 
+<!-- mcp-name: io.github.elekto-com-br/elekto-mcp-sql -->
+
 [![.NET](https://img.shields.io/badge/.NET-10-512BD4)](https://dotnet.microsoft.com)
 [![NuGet](https://img.shields.io/nuget/v/Elekto.Mcp.Sql.svg)](https://www.nuget.org/packages/Elekto.Mcp.Sql)
 [![NuGet Downloads](https://img.shields.io/nuget/dt/Elekto.Mcp.Sql.svg)](https://www.nuget.org/packages/Elekto.Mcp.Sql)
@@ -650,6 +652,12 @@ For internal use, this is preferred over self-contained (~81 MB).
 how to start the server. The file in the repository carries `$version$` where the version
 goes, and the pack writes the version being packed in its place, so there is nothing to
 update in it for a release.
+
+Each tag also publishes the server to the [MCP Registry](https://registry.modelcontextprotocol.io)
+as `io.github.elekto-com-br/elekto-mcp-sql`, once nuget.org has indexed the new version. The
+registry accepts the package as ours only if its README holds the line
+`mcp-name: io.github.elekto-com-br/elekto-mcp-sql`, which is why the comment at the top of this
+file must stay; CI fails if the packed README loses it.
 
 ### Running the tests
 
