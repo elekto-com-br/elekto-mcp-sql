@@ -108,6 +108,21 @@ parse them:
 | `get_*_definition` of a name the login cannot see returns `ok: false` instead of `[]` | `[]` read the same for "does not exist" and "hidden from you" |
 | SQL errors carry their number, and the hint tells permission, missing name and syntax apart | One generic hint covered all three |
 
+## What changed in 2.2.0
+
+No tool result changes shape. What changes is how the server starts and how it is packaged:
+
+| Change | Why |
+| ------ | --- |
+| The server starts without any connection, states it in its server instructions, and every tool answers `ok: false` with the file to create, where it looked and an example | A server that exited at startup showed only as "failed", and failed in every project when registered for all of them |
+| A configuration that cannot be read (invalid JSON, a `%{VARIABLE}` that is not set, a `--connections` file that is missing or empty) is reported the same way, instead of ending the process | The error now reaches whoever calls the tools |
+| While nothing is loaded, every call looks for the configuration again | A connections file created after the server started is used without a restart |
+| The package is listed among nuget.org's MCP servers and carries `.mcp/server.json` | So it can be found there, with a ready configuration on its **MCP Server** tab |
+
+The process no longer exits with code 1 when the configuration is missing or unreadable. Anything
+that relied on that exit code should read a tool's answer instead. The README also gained setup
+instructions for [Claude Code](#claude-code-setup) and [Codex](#codex-setup).
+
 ## Reading the Results
 
 Three things about the shape of what comes back are worth knowing before you rely on it.
