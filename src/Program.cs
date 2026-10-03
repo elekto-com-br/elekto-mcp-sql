@@ -16,45 +16,36 @@ builder.Logging.AddConsole(options =>
     options.LogToStandardErrorThreshold = LogLevel.Trace;
 });
 
-// Loads and validates configuration before starting the host.
-// Priority: --connections <path> > .elekto.mcp.conn.local.json (project) >
-//           .elekto.mcp.conn.local.json (~) > appsettings.json > web.config > MCP_SQL_CONNECTIONS
-ConnectionConfig config;
-try
-{
-    var connectionsFile = ParseConnectionsArg(args);
-    string source;
+// Loads the connections before starting the host.
+// Priority: --connections <path> > .elekto.mcp.sql.local.json (project) > appsettings.Development.json >
+//           appsettings.json > App.config / web.config > .elekto.mcp.sql.local.json (~) > MCP_SQL_CONNECTIONS
+// A configuration that cannot be loaded does not stop the server: every tool then explains how to
+// configure one (see ConnectionRegistry for why).
+var connections = new ConnectionRegistry(ParseConnectionsArg(args));
+var problem = connections.Problem;
 
-    if (connectionsFile is not null)
-    {
-        config = ConnectionConfig.LoadFromFile(connectionsFile);
-        source = connectionsFile;
-    }
-    else
-    {
-        (config, source) = ConnectionConfig.Discover();
-    }
-
+if (problem is null)
     await Console.Error.WriteLineAsync(
-        $"[Elekto.Mcp.Sql] {config.Databases.Count} connection(s) loaded from {source}");
-}
-catch (Exception ex)
-{
-    await Console.Error.WriteLineAsync($"[Elekto.Mcp.Sql] Configuration error: {ex.Message}");
-    return 1;
-}
+        $"[Elekto.Mcp.Sql] {connections.GetConfig().Databases.Count} connection(s) loaded from {connections.Source}");
+else
+    await Console.Error.WriteLineAsync(
+        $"[Elekto.Mcp.Sql] {problem.Error} Starting anyway; the tools will say how to configure a connection.");
 
-// Registers config as a singleton for injection into tools
-builder.Services.AddSingleton(config);
+// Registers the connections as a singleton for injection into tools
+builder.Services.AddSingleton(connections);
 
 // Registers the MCP server with stdio transport
 builder.Services
-    .AddMcpServer()
+    .AddMcpServer(options =>
+    {
+        // Without connections, the client learns it on connecting, before the model calls any tool
+        if (problem is not null)
+            options.ServerInstructions = problem.Instructions;
+    })
     .WithStdioServerTransport()
     .WithToolsFromAssembly();
 
 await builder.Build().RunAsync();
-return 0;
 
 // Scans args for --connections <path> and returns the path, or null if not present.
 static string? ParseConnectionsArg(string[] args)

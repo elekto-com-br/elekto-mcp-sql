@@ -27,29 +27,34 @@ namespace Elekto.Mcp.Sql.Tools;
 /// <para>
 /// Failures come back as content rather than as exceptions — see <see cref="ToolResponse"/> for why.
 /// </para>
+/// <para>
+/// With no connection configured every tool still answers, with the steps to configure one; see
+/// <see cref="ConnectionRegistry"/>.
+/// </para>
 /// </remarks>
 [McpServerToolType]
 public sealed class SqlTools
 {
-    private readonly ConnectionConfig _config;
+    private readonly ConnectionRegistry _connections;
 
-    public SqlTools(ConnectionConfig config) => _config = config;
+    public SqlTools(ConnectionRegistry connections) => _connections = connections;
 
     private SchemaReader GetReader(string database)
     {
-        if (!_config.Databases.TryGetValue(database, out var entry))
+        var config = _connections.GetConfig();
+        if (!config.Databases.TryGetValue(database, out var entry))
         {
-            var available = string.Join(", ", _config.Databases.Keys);
+            var available = string.Join(", ", config.Databases.Keys);
             throw new ToolInputException(
                 $"No database named '{database}' is registered.",
                 $"Registered databases are: {available}. Call list_databases to see them with their limits.",
-                new { database = _config.Databases.Keys.FirstOrDefault() ?? "your-database-name" });
+                new { database = config.Databases.Keys.FirstOrDefault() ?? "your-database-name" });
         }
         return new SchemaReader(entry.ConnectionString, entry.DefaultTimeoutSeconds);
     }
 
     private int GetMaxRows(string database) =>
-        _config.Databases.TryGetValue(database, out var e) ? e.MaxQueryRows : 10_000;
+        _connections.GetConfig().Databases.TryGetValue(database, out var e) ? e.MaxQueryRows : 10_000;
 
     /// <summary>Empty means "not supplied"; the readers expect null for that.</summary>
     private static string? Optional(string value) =>
@@ -57,10 +62,11 @@ public sealed class SqlTools
 
     [McpServerTool, Description(
         "Lists the databases registered in the MCP server configuration. " +
-        "Use this tool first to discover which databases are available.")]
+        "Use this tool first to discover which databases are available. " +
+        "When none is configured, it says how to configure one.")]
     public string list_databases() => ToolResponse.Guard(nameof(list_databases), () =>
     {
-        var entries = _config.Databases.Select(kv => new
+        var entries = _connections.GetConfig().Databases.Select(kv => new
         {
             name = kv.Key,
             max_query_rows = kv.Value.MaxQueryRows,

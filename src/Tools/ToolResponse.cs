@@ -3,6 +3,7 @@
 // See the LICENSE file for the full license text.
 
 using System.Text.Json;
+using Elekto.Mcp.Sql.Configuration;
 using Elekto.Mcp.Sql.Data;
 using Microsoft.Data.SqlClient;
 
@@ -38,6 +39,10 @@ internal static class ToolResponse
         {
             return action();
         }
+        catch (NotConfiguredException ex)
+        {
+            return Failure(toolName, ex.Guide.Error, ex.Guide.Hint, ex.Guide.Example, ex.Guide.Setup);
+        }
         catch (ToolInputException ex)
         {
             return Failure(toolName, ex.Message, ex.Hint, ex.Example);
@@ -60,7 +65,7 @@ internal static class ToolResponse
         }
     }
 
-    private static string Failure(string toolName, string error, string? hint, object? example)
+    private static string Failure(string toolName, string error, string? hint, object? example, object? setup = null)
     {
         var payload = new Dictionary<string, object?>
         {
@@ -71,6 +76,7 @@ internal static class ToolResponse
 
         if (!string.IsNullOrWhiteSpace(hint)) payload["hint"] = hint;
         if (example is not null) payload["example"] = example;
+        if (setup is not null) payload["setup"] = setup;
 
         return JsonSerializer.Serialize(payload);
     }

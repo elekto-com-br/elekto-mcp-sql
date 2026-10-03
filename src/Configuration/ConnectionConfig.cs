@@ -59,6 +59,22 @@ public sealed partial class ConnectionConfig
     public static (ConnectionConfig Config, string Source) Discover(
         string? workingDirectory = null,
         string? homeDirectory = null)
+        => TryDiscover(workingDirectory, homeDirectory)
+           ?? throw new InvalidOperationException(
+               $"No connections found. Provide one of:\n" +
+               $"  • {LocalFileName} in the project or home directory\n" +
+               $"  • --connections <path>\n" +
+               $"  • ConnectionStrings section in appsettings.json / web.config\n" +
+               $"  • Environment variable '{EnvVarName}'");
+
+    /// <summary>
+    /// As <see cref="Discover"/>, but returns null instead of throwing when no source holds a
+    /// connection. A source that is present but cannot be read still throws, as it does from
+    /// <see cref="Discover"/>: that is a mistake to report, not an absence.
+    /// </summary>
+    public static (ConnectionConfig Config, string Source)? TryDiscover(
+        string? workingDirectory = null,
+        string? homeDirectory = null)
     {
         workingDirectory ??= Directory.GetCurrentDirectory();
         homeDirectory ??= Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -97,16 +113,25 @@ public sealed partial class ConnectionConfig
 
         // ---- End of chain ----
 
-        if (merged.Count == 0)
-            throw new InvalidOperationException(
-                $"No connections found. Provide one of:\n" +
-                $"  • {LocalFileName} in the project or home directory\n" +
-                $"  • --connections <path>\n" +
-                $"  • ConnectionStrings section in appsettings.json / web.config\n" +
-                $"  • Environment variable '{EnvVarName}'");
+        if (merged.Count == 0) return null;
 
         return (new ConnectionConfig(merged), string.Join(" + ", sources));
     }
+
+    /// <summary>
+    /// The places <see cref="Discover"/> reads, highest priority first, so a user can be told where
+    /// a connection may go. Keep it in step with <see cref="TryDiscover"/>.
+    /// </summary>
+    public static IReadOnlyList<string> DescribeDiscoverySources(string workingDirectory, string homeDirectory) =>
+    [
+        Path.Combine(workingDirectory, LocalFileName),
+        $"ConnectionStrings in {Path.Combine(workingDirectory, "appsettings.Development.json")}",
+        $"ConnectionStrings in {Path.Combine(workingDirectory, "appsettings.json")}",
+        $"connectionStrings in {Path.Combine(workingDirectory, "web.config")}",
+        $"connectionStrings in {Path.Combine(workingDirectory, "App.config")}",
+        Path.Combine(homeDirectory, LocalFileName),
+        $"environment variable {EnvVarName}"
+    ];
 
     // -------------------------------------------------------------------------
     // Explicit sources (single-source, no merge)
