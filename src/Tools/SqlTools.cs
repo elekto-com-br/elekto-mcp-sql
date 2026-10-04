@@ -417,10 +417,13 @@ public sealed class SqlTools
 
     [McpServerTool(Title = "Dependency diagram (DOT)", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description(
-        "Generates a Graphviz DOT diagram of the dependencies between database objects, with node " +
-        "metadata (node_kind) for styling. Use it to draw or render the dependency graph; for the " +
-        "edges as data use get_dependency_graph. 'visibility' says when module references are missing " +
-        "for lack of permission.")]
+        "Generates a Graphviz DOT diagram of the dependencies between database objects: an arrow runs " +
+        "from each table, view, procedure or function to the object it depends on, through a foreign " +
+        "key or a reference in its code. Returns the DOT text in 'dot', ready for 'dot -Tsvg', and the " +
+        "same graph as 'nodes' (with node_kind) and 'edges' (with dependency_kind). Use it to draw the " +
+        "graph; for the edges alone use get_dependency_graph, and for what references a single table " +
+        "use get_table_usage. A whole database makes an unreadable diagram, so narrow it with schema. " +
+        "'visibility' says when references from code are missing for lack of permission.")]
     public string generate_dependency_dot(
         [Description("Name of the database as registered in the configuration.")]
         string database,

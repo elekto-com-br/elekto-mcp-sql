@@ -82,6 +82,47 @@ jobs:
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
 
+  # Creates the GitHub Release for the tag, once the package is on NuGet. Glama rebuilds the
+  # server on every GitHub release (its Auto-Release), so this keeps it in step with nuget.org.
+  github-release:
+    name: Create the GitHub Release
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The notes are the README's "What changed in <version>" section when there is one
+      - name: Write release notes
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          awk -v h="## What changed in ${VERSION}" '
+            $0 == h { on = 1; next }
+            on && /^## / { exit }
+            on { print }
+          ' README.md > notes.md
+
+          if ! grep -q '[^[:space:]]' notes.md; then
+            : > notes.md
+          fi
+          {
+            echo
+            echo "Install or update: \`dotnet tool update -g Elekto.Mcp.Sql\`"
+            echo
+            echo "- NuGet: https://www.nuget.org/packages/Elekto.Mcp.Sql/${VERSION}"
+            echo "- MCP Registry: io.github.elekto-com-br/elekto-mcp-sql"
+          } >> notes.md
+          cat notes.md
+
+      - name: Create the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --notes-file notes.md
+
   # Lists the version just pushed to NuGet in the MCP Registry (registry.modelcontextprotocol.io).
   # A job of its own, so that only it holds the OIDC token, and so that it can be re-run alone.
   mcp-registry:

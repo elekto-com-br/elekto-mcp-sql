@@ -7,6 +7,7 @@
 [![NuGet Downloads](https://img.shields.io/nuget/dt/Elekto.Mcp.Sql.svg)](https://www.nuget.org/packages/Elekto.Mcp.Sql)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![CI](https://github.com/elekto-com-br/elekto-mcp-sql/actions/workflows/ci.yml/badge.svg)](https://github.com/elekto-com-br/elekto-mcp-sql/actions/workflows/ci.yml)
+[![elekto-com-br/elekto-mcp-sql MCP server](https://glama.ai/mcp/servers/elekto-com-br/elekto-mcp-sql/badges/score.svg)](https://glama.ai/mcp/servers/elekto-com-br/elekto-mcp-sql)
 
 Read-only MCP server for SQL Server 2017+ introspection and querying (tested on 2019 and 2022).
 Exposes schema metadata, object definitions, and data queries via the MCP protocol (stdio),
