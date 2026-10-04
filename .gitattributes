@@ -1,2 +1,3 @@
-* text=auto eol=crlf
-*.sh text eol=lf
+# LF everywhere, on every platform: Visual Studio, VS Code and git on Windows all handle it, and
+# scripts and workflows parsed on Linux runners break on a stray CR
+* text=auto eol=lf
