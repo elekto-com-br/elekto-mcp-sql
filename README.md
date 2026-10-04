@@ -144,6 +144,15 @@ besides the DOT text, how to render it and when another tool fits better. The se
 the MCP Registry as "Elekto MCP for SQL Server", and each release now also appears under the
 repository's GitHub Releases.
 
+## What changed in 2.3.2
+
+Nothing changes shape. When no connection is configured, the guidance returned to the agent now
+tells it to agree with the user before writing anything, and never to write a password into the
+connections file or anywhere else, using `%{VARIABLE}` in its place. It also points to connections
+the project may already keep where this server does not look (`spring.datasource.url` in
+`application.properties` or `application.yml`, or a `sqlserver://` or `mssql://` URL in a `.env`
+file), for the agent to show the user rather than for the server to parse.
+
 ## Reading the Results
 
 Three things about the shape of what comes back are worth knowing before you rely on it.
