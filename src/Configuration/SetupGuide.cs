@@ -57,13 +57,18 @@ internal sealed class SetupGuide
         var (error, hint) = problem is null
             ? ("No database connection is configured: none of the places this server reads holds a " +
                "connection string.",
-               "Ask the user for a SQL Server connection string, preferably of a login that can only " +
-               "read, and save it in the file named in 'setup.file', with the shape shown in 'example'. " +
-               "The server looks again on every call, so the next one uses it without a restart.")
+               "Tell the user, and agree with them before writing anything. With their go-ahead, create " +
+               "the file named in 'setup.file' with the shape shown in 'example', for a login that can " +
+               "only read. " + NoSecretsRule + " If the project already keeps its connection in a file " +
+               "this server does not read, such as spring.datasource.url (jdbc:sqlserver://...) in " +
+               "application.properties or application.yml, or a sqlserver:// or mssql:// URL in a .env " +
+               "file, show the user where and build the entry from it, under the same rule. The server " +
+               "looks again on every call, so the next one uses the file without a restart.")
             : ($"No database connection is configured: the configuration could not be read. {problem}",
-               "Correct the source the error names; 'setup.searched' lists every place the server " +
-               "reads, and 'example' shows the shape of a connections file. The server looks again on " +
-               "every call, so the next one after the fix uses it without a restart.");
+               "Show the user the source the error names and, with their go-ahead, correct it; " +
+               "'setup.searched' lists every place the server reads, and 'example' shows the shape of a " +
+               "connections file. " + NoSecretsRule + " The server looks again on every call, so the " +
+               "next one after the fix uses it without a restart.");
 
         return new SetupGuide(error, hint, file, new Dictionary<string, object?>
         {
@@ -90,8 +95,9 @@ internal sealed class SetupGuide
 
         return new SetupGuide(
             $"No database connection is configured: the file given with --connections could not be used. {problem}",
-            "Create or correct the file named in 'setup.file', with the shape shown in 'example'. While " +
-            "--connections is given no other source is read. The server reads the file again on every " +
+            "Tell the user, and with their go-ahead create or correct the file named in 'setup.file', " +
+            "with the shape shown in 'example'. " + NoSecretsRule + " While --connections is given no " +
+            "other source is read. The server reads the file again on every " +
             "call, so the next one after the fix uses it without a restart.",
             file,
             new Dictionary<string, object?>
@@ -102,9 +108,16 @@ internal sealed class SetupGuide
             });
     }
 
+    // An agent following these steps writes files in the user's project; the rule keeps a password
+    // out of every file it may write, and the decision to write anything with the user
+    private const string NoSecretsRule =
+        "Never write a password into it, nor anywhere else (a scratch file, a commit, a message): " +
+        "put %{VARIABLE} in its place and ask the user to set that environment variable.";
+
     private const string CredentialsNote =
-        "A connections file can hold credentials. Keep it out of source control (add it to .gitignore), " +
-        "or write %{VARIABLE} in the connection string and keep the secret in that environment variable.";
+        "Keep passwords out of the connections file: write %{VARIABLE} in the connection string and " +
+        "keep the secret in that environment variable, which the MCP client must pass to the server " +
+        "(Codex passes only the variables listed in env_vars). Add the file to .gitignore all the same.";
 
     private const string ReadOnlyNote =
         "A login that can only read is enough for every tool. Once connected, check_permissions says " +

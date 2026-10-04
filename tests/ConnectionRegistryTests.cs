@@ -205,6 +205,23 @@ public class ConnectionRegistryTests
     }
 
     [Test]
+    public void Guidance_AsksTheUserFirst_AndKeepsPasswordsOutOfFiles()
+    {
+        // O agente que segue estas instruções escreve no projeto do usuário: precisa combinar antes
+        // e nunca gravar uma senha
+        var discovery = new ConnectionRegistry(null, _dir, _home).Problem!;
+        var explicitFile = new ConnectionRegistry(Path.Combine(_dir, "conns.json"), _dir, _home).Problem!;
+
+        WriteFile(_dir, ConnectionConfig.LocalFileName, "{ not json");
+        var unreadable = new ConnectionRegistry(null, _dir, _home).Problem!;
+
+        foreach (var hint in new[] { discovery.Hint, explicitFile.Hint, unreadable.Hint })
+            Assert.That(hint, Does.Contain("go-ahead").And.Contain("Never write a password").And.Contain("%{VARIABLE}"));
+
+        Assert.That(discovery.Hint, Does.Contain("application.properties").And.Contain(".env"));
+    }
+
+    [Test]
     public void Instructions_NameTheFileToCreate()
     {
         var registry = new ConnectionRegistry(null, _dir, _home);
