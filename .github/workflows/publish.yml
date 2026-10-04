@@ -99,7 +99,9 @@ jobs:
         shell: bash
         run: |
           VERSION=${GITHUB_REF_NAME#v}
+          # .gitattributes checks text out with CRLF, also on the runner, so drop the CR first
           awk -v h="## What changed in ${VERSION}" '
+            { sub(/\r$/, "") }
             $0 == h { on = 1; next }
             on && /^## / { exit }
             on { print }
