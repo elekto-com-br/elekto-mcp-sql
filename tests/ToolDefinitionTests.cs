@@ -6,9 +6,9 @@ using ModelContextProtocol.Server;
 namespace Elekto.Mcp.Sql.Tests;
 
 /// <summary>
-/// O que cada ferramenta publica em tools/list é o que o agente usa para escolhê-la; estes testes
-/// impedem que uma ferramenta nova ou alterada volte a sair sem título, sem anotações ou sem dizer
-/// quando usar outra.
+/// What each tool publishes in tools/list is all an agent has to choose it by. These tests stop a
+/// new or changed tool from shipping again without a title, without annotations, or without saying
+/// when to use another tool.
 /// </summary>
 [TestFixture]
 public class ToolDefinitionTests

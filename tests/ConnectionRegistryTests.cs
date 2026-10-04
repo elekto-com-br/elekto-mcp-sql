@@ -5,7 +5,7 @@ using Elekto.Mcp.Sql.Tools;
 namespace Elekto.Mcp.Sql.Tests;
 
 /// <summary>
-/// Sem conexões o servidor sobe mesmo assim, e cada ferramenta explica como configurar uma.
+/// With no connection the server still starts, and every tool explains how to configure one.
 /// </summary>
 [TestFixture]
 public class ConnectionRegistryTests
@@ -16,7 +16,7 @@ public class ConnectionRegistryTests
     [SetUp]
     public void Setup()
     {
-        // Discover() também lê a variável de ambiente; garante que ela não interfira
+        // Discover() also reads the environment variable; make sure it does not interfere
         Environment.SetEnvironmentVariable(ConnectionConfig.EnvVarName, null);
         _dir = MakeTempDir();
         _home = MakeTempDir();
@@ -31,7 +31,7 @@ public class ConnectionRegistryTests
     }
 
     // -------------------------------------------------------------------------
-    // Descoberta automática (sem --connections)
+    // Discovery (no --connections)
     // -------------------------------------------------------------------------
 
     [Test]
@@ -112,7 +112,7 @@ public class ConnectionRegistryTests
     }
 
     // -------------------------------------------------------------------------
-    // Arquivo explícito (--connections)
+    // Explicit file (--connections)
     // -------------------------------------------------------------------------
 
     [Test]
@@ -147,7 +147,7 @@ public class ConnectionRegistryTests
     [Test]
     public void ExplicitFile_IgnoresOtherSources()
     {
-        // Com --connections nenhuma outra fonte é lida, nem quando o arquivo falta
+        // With --connections no other source is read, not even when the file is missing
         WriteFile(_dir, ConnectionConfig.LocalFileName,
             """{"Other": "Server=.;Database=Other;Integrated Security=SSPI"}""");
 
@@ -157,7 +157,7 @@ public class ConnectionRegistryTests
     }
 
     // -------------------------------------------------------------------------
-    // O que as ferramentas devolvem
+    // What the tools return
     // -------------------------------------------------------------------------
 
     [Test]
@@ -207,8 +207,8 @@ public class ConnectionRegistryTests
     [Test]
     public void Guidance_AsksTheUserFirst_AndKeepsPasswordsOutOfFiles()
     {
-        // O agente que segue estas instruções escreve no projeto do usuário: precisa combinar antes
-        // e nunca gravar uma senha
+        // An agent following these steps writes into the user's project: it must agree with the
+        // user first and never write a password
         var discovery = new ConnectionRegistry(null, _dir, _home).Problem!;
         var explicitFile = new ConnectionRegistry(Path.Combine(_dir, "conns.json"), _dir, _home).Problem!;
 

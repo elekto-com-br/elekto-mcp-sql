@@ -11,7 +11,7 @@ public class ConnectionConfigTests
     public void Cleanup() => Environment.SetEnvironmentVariable(EnvVar, null);
 
     // -------------------------------------------------------------------------
-    // Formato simples (string de conexão direta) — via variável de ambiente
+    // Simple format (a bare connection string), through the environment variable
     // -------------------------------------------------------------------------
 
     [Test]
@@ -39,7 +39,7 @@ public class ConnectionConfigTests
     }
 
     // -------------------------------------------------------------------------
-    // Formato objeto
+    // Object format
     // -------------------------------------------------------------------------
 
     [Test]
@@ -96,7 +96,7 @@ public class ConnectionConfigTests
     }
 
     // -------------------------------------------------------------------------
-    // Múltiplos bancos
+    // Several databases
     // -------------------------------------------------------------------------
 
     [Test]
@@ -115,7 +115,7 @@ public class ConnectionConfigTests
     }
 
     // -------------------------------------------------------------------------
-    // Expansão de variáveis de ambiente
+    // Environment variable expansion
     // -------------------------------------------------------------------------
 
     [Test]
@@ -142,7 +142,7 @@ public class ConnectionConfigTests
     [Test]
     public void Load_MissingVariable_ThrowsArgumentException()
     {
-        // Garante que a variável não existe
+        // Make sure the variable does not exist
         Environment.SetEnvironmentVariable("TEST_MCP_NONEXISTENT", null);
         Environment.SetEnvironmentVariable(EnvVar,
             """{"MyDb": "Server=.;Password=%{TEST_MCP_NONEXISTENT}"}""");
@@ -151,12 +151,12 @@ public class ConnectionConfigTests
     }
 
     // -------------------------------------------------------------------------
-    // Erros de configuração — variável de ambiente
+    // Configuration errors, environment variable
     // -------------------------------------------------------------------------
 
     [Test]
     public void Load_EnvVarNotSet_ThrowsInvalidOperationException() =>
-        // EnvVar já foi limpa no TearDown do teste anterior (ou nunca foi setada)
+        // EnvVar was cleared by the previous test's TearDown (or never set)
         Assert.Throws<InvalidOperationException>(() => ConnectionConfig.Load());
 
     [Test]
@@ -180,7 +180,7 @@ public class ConnectionConfigTests
     }
 
     // -------------------------------------------------------------------------
-    // LoadFromFile — carregamento via arquivo
+    // LoadFromFile, loading from a file
     // -------------------------------------------------------------------------
 
     [Test]
@@ -289,13 +289,13 @@ public class ConnectionConfigTests
     }
 
     // -------------------------------------------------------------------------
-    // Discover() — merge de todas as fontes por prioridade
+    // Discover(), merging every source by priority
     // -------------------------------------------------------------------------
 
     [Test]
     public void Discover_MergesBothLocalFiles_UniqueNames()
     {
-        // Nomes diferentes em home e projeto: ambos aparecem no resultado
+        // Different names in home and project: both appear in the result
         var dir = MakeTempDir();
         var homedir = MakeTempDir();
         try
@@ -318,7 +318,7 @@ public class ConnectionConfigTests
     [Test]
     public void Discover_ProjectLocalFile_OverridesHomeFile_SameName()
     {
-        // Mesmo nome nas duas fontes: projeto vence
+        // Same name in both sources: the project wins
         var dir = MakeTempDir();
         var homedir = MakeTempDir();
         try
@@ -379,7 +379,7 @@ public class ConnectionConfigTests
     [Test]
     public void Discover_AppSettingsDevelopmentJson_OverridesAppSettings()
     {
-        // Development sobrescreve appsettings.json para o mesmo nome
+        // Development overrides appsettings.json for the same name
         var dir = MakeTempDir();
         var homedir = MakeTempDir();
         try
@@ -410,7 +410,7 @@ public class ConnectionConfigTests
     [Test]
     public void Discover_ProjectLocalFile_OverridesAppSettings_SameName()
     {
-        // .elekto.mcp.conn.local.json do projeto tem prioridade sobre appsettings
+        // The project's .elekto.mcp.sql.local.json takes priority over appsettings
         var dir = MakeTempDir();
         var homedir = MakeTempDir();
         try
@@ -436,7 +436,7 @@ public class ConnectionConfigTests
     [Test]
     public void Discover_AllSourcesMerged_UniqueNamesAccumulate()
     {
-        // Cada fonte contribui com um nome diferente: todos aparecem
+        // Each source contributes a different name: all of them appear
         var dir = MakeTempDir();
         var homedir = MakeTempDir();
         Environment.SetEnvironmentVariable(EnvVar,
@@ -461,7 +461,7 @@ public class ConnectionConfigTests
             Assert.That(config.Databases, Contains.Key("HomeDb"));
             Assert.That(config.Databases, Contains.Key("AppDb"));
             Assert.That(config.Databases, Contains.Key("WorkDb"));
-            // Source deve listar todas as origens que contribuíram
+            // Source must list every source that contributed
             Assert.That(source, Does.Contain(EnvVar));
             Assert.That(source, Does.Contain("appsettings.json"));
         }

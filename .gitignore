@@ -12,16 +12,16 @@ nupkg/
 # Rider
 .idea/
 
-# Logs e cobertura
+# Logs and coverage
 *.log
 coverage*/
 TestResults/
 
-# Não versionar configuração local com connection strings
+# Local MCP client configuration may hold connection strings; never commit it
 .mcp.json
 
 # Claude Code
 .claude/settings.local.json
 
-# Arquivo local de conexões (nunca versionar — contém credenciais)
+# Local connections file (never commit it: it may hold credentials)
 .elekto.mcp.sql.local.json
