@@ -137,6 +137,13 @@ agent chooses them by:
 | Every description says what the tool does, when to use it and which tool to use instead | So an agent picks the right one of 21 tools the first time |
 | The server always sends instructions on connecting, describing how the tools fit together | Previously it sent them only when no connection was configured |
 
+## What changed in 2.3.1
+
+Nothing changes shape. `generate_dependency_dot` now says which way its arrows point, what it returns
+besides the DOT text, how to render it and when another tool fits better. The server is listed in
+the MCP Registry as "Elekto MCP for SQL Server", and each release now also appears under the
+repository's GitHub Releases.
+
 ## Reading the Results
 
 Three things about the shape of what comes back are worth knowing before you rely on it.
