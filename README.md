@@ -687,6 +687,10 @@ registry accepts the package as ours only if its README holds the line
 `mcp-name: io.github.elekto-com-br/elekto-mcp-sql`, which is why the comment at the top of this
 file must stay; CI fails if the packed README loses it.
 
+Package versions are locked in `src/packages.lock.json` and `tests/packages.lock.json`. After
+changing a `PackageReference`, run `dotnet restore` and commit the lock files with it: CI and the
+release restore in locked mode, and fail when a lock file does not match its project.
+
 ### Running the tests
 
 From the repository root:
