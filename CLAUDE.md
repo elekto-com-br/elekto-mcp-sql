@@ -58,6 +58,21 @@ each project keeps its `packages.lock.json`. CI and the publish workflow restore
 `--locked-mode`, so they fail when a lock file does not match its project. After changing a
 `PackageReference`, run `dotnet restore` and commit the lock files with it; never edit them by hand.
 
+## Workflows
+
+The package runs on developers' machines with their database credentials, so the workflows keep
+third-party code away from anything that can publish:
+
+- Actions are pinned by full commit SHA, with the release in a comment (`# v7.0.1`); never by tag.
+- Restore, build and test (NuGet packages with build targets and analyzers, the test container) run
+  only in jobs with read-only permissions and no secrets. The jobs that can publish (a nuget.org
+  key, `id-token: write`, `contents: write`) run no code from the repository or from NuGet: they
+  work from the package the build job made, and the one tool they download, `mcp-publisher`, is
+  pinned by version and SHA-256.
+- Every job gets the least permissions it needs; the default for both workflows is `contents: read`.
+- Secrets reach a command through `env`, never interpolated with `${{ }}` into its text.
+- `.github/scripts/verify-package.sh` checks the packed `.nupkg` the same way in CI and at release.
+
 ## Releases
 
 1. Add a `## What changed in X.Y.Z` section to `README.md`; it becomes the GitHub Release notes.
@@ -65,9 +80,11 @@ each project keeps its `packages.lock.json`. CI and the publish workflow restore
 3. Commit as `chore(release): X.Y.Z`, push, and wait for CI on `main` to pass.
 4. Push the annotated tag: `git tag -a vX.Y.Z -m "X.Y.Z" && git push origin vX.Y.Z`.
 
-The tag runs `.github/workflows/publish.yml`: tests, NuGet push, then the GitHub Release and the
-MCP Registry publication (which waits for nuget.org to serve the package). Glama rebuilds on each
-GitHub Release.
+The tag runs `.github/workflows/publish.yml`: a build job tests and packs with no credentials and
+hands the `.nupkg` to a publish job, which attests its build provenance and pushes it to nuget.org
+(Trusted Publishing when the variable `NUGET_USER` is set, otherwise the secret `NUGET_API_KEY`).
+Then come the GitHub Release, with the package attached, and the MCP Registry publication (which
+waits for nuget.org to serve the package). Glama rebuilds on each GitHub Release.
 
 The README must keep `<!-- mcp-name: io.github.elekto-com-br/elekto-mcp-sql -->`: the MCP Registry
 reads it to accept the package, and CI fails without it.
