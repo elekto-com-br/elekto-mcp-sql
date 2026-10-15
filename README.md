@@ -691,6 +691,20 @@ Package versions are locked in `src/packages.lock.json` and `tests/packages.lock
 changing a `PackageReference`, run `dotnet restore` and commit the lock files with it: CI and the
 release restore in locked mode, and fail when a lock file does not match its project.
 
+### Verifying a release
+
+Releases after 2.3.2 carry the package on their [GitHub Release](https://github.com/elekto-com-br/elekto-mcp-sql/releases),
+with a build provenance attestation that ties it to this repository's publish workflow and the
+release tag. To check it with the [GitHub CLI](https://cli.github.com/):
+
+```bash
+gh release download vX.Y.Z --repo elekto-com-br/elekto-mcp-sql --pattern '*.nupkg'
+gh attestation verify Elekto.Mcp.Sql.X.Y.Z.nupkg --repo elekto-com-br/elekto-mcp-sql
+```
+
+The copy that nuget.org serves also carries nuget.org's own repository signature, so it differs
+from the attested file; `dotnet nuget verify` checks that signature.
+
 ### Running the tests
 
 From the repository root:
