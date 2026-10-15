@@ -166,6 +166,14 @@ This is also the first release whose GitHub Release carries the package, with a 
 attestation; [Verifying a release](https://github.com/elekto-com-br/elekto-mcp-sql#verifying-a-release)
 shows how to check it.
 
+## What changed in 2.3.4
+
+Nothing changes shape. The tool now runs on `Microsoft.Data.SqlClient` 7.1.1 (it was 7.0.2), whose
+fixes cover connection pooling, transactions and Named Pipes, and on `Microsoft.Extensions.Hosting`
+10.0.12. It still ships the fixed `System.Security.Cryptography.Pkcs` 10.0.13 from 2.3.3. The
+package is now published to nuget.org only through Trusted Publishing: the release workflow no
+longer uses a stored API key.
+
 ## Reading the Results
 
 Three things about the shape of what comes back are worth knowing before you rely on it.
