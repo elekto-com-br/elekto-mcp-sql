@@ -51,6 +51,13 @@ Integration tests need a SQL Server: `ELEKTO_MCP_SQL_CONN_TEST`, LocalDB on Wind
 Testcontainers container through Docker. Unit tests alone:
 `dotnet test --filter "FullyQualifiedName!~SchemaReaderTests"`.
 
+## Dependencies
+
+Package versions are locked: `Directory.Build.props` turns on `RestorePackagesWithLockFile`, and
+each project keeps its `packages.lock.json`. CI and the publish workflow restore with
+`--locked-mode`, so they fail when a lock file does not match its project. After changing a
+`PackageReference`, run `dotnet restore` and commit the lock files with it; never edit them by hand.
+
 ## Releases
 
 1. Add a `## What changed in X.Y.Z` section to `README.md`; it becomes the GitHub Release notes.

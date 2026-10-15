@@ -47,7 +47,7 @@ jobs:
 
       - name: Restore
         shell: bash
-        run: dotnet restore
+        run: dotnet restore --locked-mode
 
       - name: Build
         shell: bash
