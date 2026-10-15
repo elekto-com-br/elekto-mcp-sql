@@ -153,6 +153,19 @@ the project may already keep where this server does not look (`spring.datasource
 `application.properties` or `application.yml`, or a `sqlserver://` or `mssql://` URL in a `.env`
 file), for the agent to show the user rather than for the server to parse.
 
+## What changed in 2.3.3
+
+Nothing changes shape. The tool shipped `System.Security.Cryptography.Pkcs` 9.0.13, which
+`Microsoft.Data.SqlClient` brings in and which two .NET denial of service advisories affect:
+[GHSA-846f-f764-76mx](https://github.com/advisories/GHSA-846f-f764-76mx) (CVE-2026-84008, high) and
+[GHSA-2fmv-rv2c-59x7](https://github.com/advisories/GHSA-2fmv-rv2c-59x7) (CVE-2026-70162, moderate).
+It now ships the fixed 10.0.13. Update the global tool with `dotnet tool update -g Elekto.Mcp.Sql`;
+a `dnx` configuration that names no version picks up 2.3.3 by itself.
+
+This is also the first release whose GitHub Release carries the package, with a build provenance
+attestation; [Verifying a release](https://github.com/elekto-com-br/elekto-mcp-sql#verifying-a-release)
+shows how to check it.
+
 ## Reading the Results
 
 Three things about the shape of what comes back are worth knowing before you rely on it.
