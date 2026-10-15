@@ -64,6 +64,7 @@ The package runs on developers' machines with their database credentials, so the
 third-party code away from anything that can publish:
 
 - Actions are pinned by full commit SHA, with the release in a comment (`# v7.0.1`); never by tag.
+  Dependabot (`.github/dependabot.yml`) proposes updates for actions and NuGet packages.
 - Restore, build and test (NuGet packages with build targets and analyzers, the test container) run
   only in jobs with read-only permissions and no secrets. The jobs that can publish (a nuget.org
   key, `id-token: write`, `contents: write`) run no code from the repository or from NuGet: they

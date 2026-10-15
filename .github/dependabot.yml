@@ -1,0 +1,36 @@
+# Actions are pinned by commit SHA and NuGet packages by the packages.lock.json files, so nothing new
+# arrives by itself: Dependabot proposes it in a pull request, where CI runs first. It updates the
+# SHA together with its version comment, and the lock files together with the package version.
+# The cooldown holds a new release back for a week, time for a compromised one to be found and pulled.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns:
+          - '*'
+
+  # Minor and patch updates come together; a major version comes in a pull request of its own
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      nuget:
+        patterns:
+          - '*'
+        update-types:
+          - minor
+          - patch
