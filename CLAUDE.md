@@ -66,10 +66,10 @@ third-party code away from anything that can publish:
 - Actions are pinned by full commit SHA, with the release in a comment (`# v7.0.1`); never by tag.
   Dependabot (`.github/dependabot.yml`) proposes updates for actions and NuGet packages.
 - Restore, build and test (NuGet packages with build targets and analyzers, the test container) run
-  only in jobs with read-only permissions and no secrets. The jobs that can publish (a nuget.org
-  key, `id-token: write`, `contents: write`) run no code from the repository or from NuGet: they
-  work from the package the build job made, and the one tool they download, `mcp-publisher`, is
-  pinned by version and SHA-256.
+  only in jobs with read-only permissions and no secrets. The jobs that can publish
+  (`id-token: write`, which logs in to nuget.org and the MCP Registry, and `contents: write`) run
+  no code from the repository or from NuGet: they work from the package the build job made, and the
+  one tool they download, `mcp-publisher`, is pinned by version and SHA-256.
 - Every job gets the least permissions it needs; the default for both workflows is `contents: read`.
 - Secrets reach a command through `env`, never interpolated with `${{ }}` into its text.
 - `.github/scripts/verify-package.sh` checks the packed `.nupkg` the same way in CI and at release.
@@ -83,9 +83,10 @@ third-party code away from anything that can publish:
 
 The tag runs `.github/workflows/publish.yml`: a build job tests and packs with no credentials and
 hands the `.nupkg` to a publish job, which attests its build provenance and pushes it to nuget.org
-(Trusted Publishing when the variable `NUGET_USER` is set, otherwise the secret `NUGET_API_KEY`).
-Then come the GitHub Release, with the package attached, and the MCP Registry publication (which
-waits for nuget.org to serve the package). Glama rebuilds on each GitHub Release.
+through Trusted Publishing, as the nuget.org user that the variable `NUGET_USER` names. No key is
+stored, so when that login fails, nothing is published. Then come the GitHub Release, with the
+package attached, and the MCP Registry publication (which waits for nuget.org to serve the
+package). Glama rebuilds on each GitHub Release.
 
 The README must keep `<!-- mcp-name: io.github.elekto-com-br/elekto-mcp-sql -->`: the MCP Registry
 reads it to accept the package, and CI fails without it.

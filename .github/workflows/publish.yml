@@ -111,13 +111,12 @@ jobs:
         with:
           subject-path: dist/*.nupkg
 
-      # Trusted Publishing: nuget.org trades this job's OIDC token for an API key that lasts an hour.
-      # It runs once the repository variable NUGET_USER holds the nuget.org user who created the
-      # policy. Until then, or if it fails, the push falls back to the stored NUGET_API_KEY.
+      # Trusted Publishing: nuget.org trades this job's OIDC token for an API key that lasts an
+      # hour, under the policy of the nuget.org user that the repository variable NUGET_USER names
+      # (the user who created the policy, not its owner). No long-lived key is stored anywhere, so
+      # when the login fails, the job stops here and nothing is published.
       - name: Log in to nuget.org
         id: login
-        if: vars.NUGET_USER != ''
-        continue-on-error: true
         uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
         with:
           user: ${{ vars.NUGET_USER }}
@@ -125,20 +124,8 @@ jobs:
       - name: Push to nuget.org
         shell: bash
         env:
-          TRUSTED_PUBLISHING_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
-          STORED_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
         run: |
-          if [ -n "$TRUSTED_PUBLISHING_KEY" ]; then
-            echo "Pushing with a short-lived key from Trusted Publishing."
-            NUGET_API_KEY=$TRUSTED_PUBLISHING_KEY
-          elif [ -n "$STORED_KEY" ]; then
-            echo "::warning::Pushing with the stored NUGET_API_KEY: Trusted Publishing is not set up, or it issued no key."
-            NUGET_API_KEY=$STORED_KEY
-          else
-            echo "::error::No nuget.org credential: set up Trusted Publishing (variable NUGET_USER) or the secret NUGET_API_KEY."
-            exit 1
-          fi
-
           dotnet nuget push dist/*.nupkg \
             --api-key "$NUGET_API_KEY" \
             --source https://api.nuget.org/v3/index.json \
