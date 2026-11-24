@@ -50,7 +50,25 @@ public sealed partial class SchemaReader
         return conn;
     }
 
-    private SqlConnection OpenConnection() => _openConnection();
+    /// <summary>
+    /// Opens a connection. Whatever fails here fails before any query runs, so it is reported as a
+    /// <see cref="ConnectionFailedException"/>, never as a query SQL Server rejected.
+    /// </summary>
+    private SqlConnection OpenConnection()
+    {
+        try
+        {
+            return _openConnection();
+        }
+        catch (SqlException ex)
+        {
+            throw new ConnectionFailedException(ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new ConnectionFailedException(ex);
+        }
+    }
 
     private SqlCommand CreateCommand(SqlConnection conn, string sql)
     {
@@ -1363,7 +1381,7 @@ public sealed partial class SchemaReader
             // list, a WHERE and an ORDER BY, and the bare server message rarely says which was wrong.
             var hint = SqlErrorHint.For(ex);
             throw new ToolInputException(
-                $"SQL Server rejected the query on [{effectiveSchema ?? "dbo"}].[{table}] (error {ex.Number}): {ex.Message}",
+                SqlErrorHint.Describe(ex, target: $"[{effectiveSchema ?? "dbo"}].[{table}]"),
                 hint == SqlErrorHint.Unknown
                     ? "The 'where' and 'order_by' clauses are passed to SQL Server as written, so a typo in "
                       + "either surfaces here. Confirm the column names with get_table_schema."

@@ -122,4 +122,68 @@ public class AccessReportTests
     [Test]
     public void ErrorHint_UnknownNumber_FallsBackToTheGeneralHint() =>
         Assert.That(SqlErrorHint.For([50000]), Is.EqualTo(SqlErrorHint.Unknown));
+
+    [TestCase(4060)]
+    [TestCase(4064)]
+    [TestCase(15113)]
+    [TestCase(18452)]
+    [TestCase(18456)]
+    [TestCase(18470)]
+    [TestCase(18486)]
+    [TestCase(18487)]
+    [TestCase(18488)]
+    public void ErrorHint_RefusedLogins_PointToTheConfiguration(int number) =>
+        Assert.That(SqlErrorHint.For([number]), Is.EqualTo(SqlErrorHint.Login));
+
+    [TestCase(2)]
+    [TestCase(53)]
+    [TestCase(64)]
+    [TestCase(121)]
+    [TestCase(232)]
+    [TestCase(233)]
+    [TestCase(258)]
+    [TestCase(1225)]
+    [TestCase(1231)]
+    [TestCase(1232)]
+    [TestCase(1236)]
+    [TestCase(10050)]
+    [TestCase(10051)]
+    [TestCase(10053)]
+    [TestCase(10054)]
+    [TestCase(10060)]
+    [TestCase(10061)]
+    [TestCase(10064)]
+    [TestCase(10065)]
+    [TestCase(11001)]
+    public void ErrorHint_NetworkErrors_SayTheCallIsNotAtFault(int number) =>
+        Assert.That(SqlErrorHint.For([number]), Is.EqualTo(SqlErrorHint.Connection));
+
+    [Test]
+    public void ErrorHint_TimeoutWhileQuerying_IsAQueryTimeout() =>
+        Assert.That(SqlErrorHint.For([-2]), Is.EqualTo(SqlErrorHint.Timeout));
+
+    [Test]
+    public void ErrorHint_TimeoutWhileConnecting_IsAFailedConnection() =>
+        Assert.That(SqlErrorHint.For([-2], connecting: true), Is.EqualTo(SqlErrorHint.Connection));
+
+    // While connecting no query has run, so whatever the number, the connection is what failed.
+    // SqlClient numbers "Error Locating Server/Instance Specified" -1, for one, which says nothing
+    // on its own.
+    [TestCase(-1)]
+    [TestCase(0)]
+    [TestCase(208)]
+    [TestCase(50000)]
+    public void ErrorHint_AnyErrorWhileConnecting_IsAFailedConnection(int number) =>
+        Assert.That(SqlErrorHint.For([number], connecting: true), Is.EqualTo(SqlErrorHint.Connection));
+
+    [Test]
+    public void ErrorHint_RefusedLoginWhileConnecting_StillPointsToTheConfiguration() =>
+        Assert.That(SqlErrorHint.For([4060, 18456], connecting: true), Is.EqualTo(SqlErrorHint.Login));
+
+    [Test]
+    public void ErrorHint_ConnectionAndLoginHints_DoNotSendTheCallerToTheObjects()
+    {
+        foreach (var hint in new[] { SqlErrorHint.Connection, SqlErrorHint.Login })
+            Assert.That(hint, Does.Not.Contain("list_tables").And.Not.Contain("get_table_schema"));
+    }
 }

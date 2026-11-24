@@ -19,7 +19,8 @@ internal static class ServerInstructions
         "analysis; query_table and get_data_profile to read data. SQL Server leaves out, without any " +
         "error, objects the login has no permission on, so when a result looks short call " +
         "check_permissions. A failure comes back as content with ok: false, an error, a hint and " +
-        "usually an example; correct the call from them rather than retrying it unchanged.";
+        "usually an example; correct the call from them rather than retrying it unchanged, unless the " +
+        "hint says that nothing in the call is wrong, as when the connection to SQL Server failed.";
 
     /// <summary>The instructions, with the configuration problem first when there is one.</summary>
     public static string For(string? configurationProblem) =>

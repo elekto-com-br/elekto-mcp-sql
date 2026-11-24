@@ -875,7 +875,51 @@ public class SchemaReaderTests
         Assert.That(ex!.Message, Does.Contain("[dbo].[Instrumento]"));
     }
 
+    [Test]
+    public void QueryTable_SlowerThanTheTimeout_SaysItTimedOut()
+    {
+        var reader = new SchemaReader(_db.ConnectionString, defaultTimeoutSeconds: 1);
+
+        // The catalog cross joined with itself three times over cannot be read in a second. A COUNT
+        // would not do: SQL Server turns "COUNT(*) > 0" into EXISTS and stops at the first row.
+        var call = Task.Run(() => reader.QueryTable(
+            "Instrumento", schema: "dbo", columns: null,
+            where: "(SELECT MAX(CHECKSUM(a.object_id, b.object_id, c.object_id)) FROM sys.all_objects a "
+                   + "CROSS JOIN sys.all_objects b CROSS JOIN sys.all_objects c) <> 0",
+            orderBy: null, top: 10, skip: 0, maxRows: 10_000));
+
+        // Waited for with a limit: a client that never gives up (SqlClient's managed network layer
+        // over named pipes has been seen not to) fails the test instead of hanging the run.
+        Assert.That(Task.WhenAny(call, Task.Delay(TimeSpan.FromMinutes(1))).Result, Is.SameAs(call),
+            "The query neither finished nor timed out within a minute.");
+        var ex = Assert.Throws<ToolInputException>(() => call.GetAwaiter().GetResult());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.Message, Does.StartWith("The query on [dbo].[Instrumento] timed out (error -2): "));
+            Assert.That(ex.Hint, Is.EqualTo(SqlErrorHint.Timeout));
+        });
+    }
+
     #endregion
+
+    [Test]
+    public void DatabaseThatDoesNotExist_IsARefusedLogin_NotAQueryError()
+    {
+        var connectionString = new SqlConnectionStringBuilder(_db.ConnectionString)
+        {
+            InitialCatalog = TestDatabase.DatabaseName + "_DoesNotExist",
+            Pooling = false
+        }.ConnectionString;
+
+        var ex = Assert.Throws<ConnectionFailedException>(() => new SchemaReader(connectionString).ListSchemas());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.Message, Does.StartWith("Could not connect to SQL Server (error 4060): "));
+            Assert.That(ex.Hint, Is.EqualTo(SqlErrorHint.Login));
+        });
+    }
 
     [Test]
     public void GetDependencyGraph_ReturnsForeignKeyAndSqlDependencies()

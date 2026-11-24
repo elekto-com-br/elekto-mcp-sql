@@ -51,13 +51,13 @@ internal static class ToolResponse
         {
             return Failure(toolName, ex.Message, null, null);
         }
+        catch (ConnectionFailedException ex)
+        {
+            return Failure(toolName, ex.Message, ex.Hint, null);
+        }
         catch (SqlException ex)
         {
-            return Failure(
-                toolName,
-                $"SQL Server rejected the query (error {ex.Number}): {ex.Message}",
-                SqlErrorHint.For(ex),
-                null);
+            return Failure(toolName, SqlErrorHint.Describe(ex), SqlErrorHint.For(ex), null);
         }
         catch (InvalidOperationException ex)
         {
