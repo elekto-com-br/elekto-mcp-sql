@@ -174,6 +174,24 @@ fixes cover connection pooling, transactions and Named Pipes, and on `Microsoft.
 package is now published to nuget.org only through Trusted Publishing: the release workflow no
 longer uses a stored API key.
 
+## What changed in 2.3.5
+
+Nothing changes shape. A connection that cannot be made no longer reads as a query SQL Server
+rejected. With the server out of reach, every tool answered
+"SQL Server rejected the query (error 1225)" with the hint to check that the table exists, and
+agents went looking for a table when the network was at fault. Now whatever fails while the
+connection opens reads "Could not connect to SQL Server (error N)", and the hint says that nothing
+in the call is wrong: most often the server, or a tunnel or VPN on the way to it, is down or
+closed, and when the server refused the login or the database, the User ID, the password and the
+Initial Catalog are the place to look. A connection lost during a query reads
+"Lost the connection to SQL Server", and a query that runs past the command timeout says it timed
+out and points to `default_timeout_seconds`. The server instructions no longer ask the agent to
+correct a call whose hint says nothing in it is wrong.
+
+The tool also moves to the MCP C# SDK 2.4.0 (it was 2.2.0), and to `Microsoft.Extensions.Hosting`
+and `System.Security.Cryptography.Pkcs` 10.0.15. All of it stays on the .NET 10 line, so the tool
+still needs only the .NET 10 runtime.
+
 ## Reading the Results
 
 Three things about the shape of what comes back are worth knowing before you rely on it.
