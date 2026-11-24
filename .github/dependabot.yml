@@ -34,3 +34,14 @@ updates:
         update-types:
           - minor
           - patch
+    # The runtime's own packages take its major version, and the tool targets net10.0. A new major
+    # (11.0 for .NET 11) still builds for net10.0, but brings that runtime's System.* libraries
+    # along, which the tool would then ship beside the .NET 10 runtime for nothing it uses. Fixes
+    # keep coming as 10.0.x patches. Revisit when the target framework moves.
+    ignore:
+      - dependency-name: 'Microsoft.Extensions.*'
+        update-types:
+          - 'version-update:semver-major'
+      - dependency-name: 'System.*'
+        update-types:
+          - 'version-update:semver-major'
